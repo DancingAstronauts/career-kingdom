@@ -160,6 +160,18 @@
     .section .hint{font-size:11px;line-height:1.5;color:var(--ink-soft);font-weight:700;margin:-4px 0 10px}
 
     .resident-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+    .resident-list.world-list{
+      max-height:420px;
+      overflow-y:auto;
+      align-content:start;
+      padding-right:5px;
+      scrollbar-gutter:stable;
+      scrollbar-width:thin;
+      scrollbar-color:#8e8061 #d9ceb0;
+    }
+    .resident-list.world-list::-webkit-scrollbar{width:10px}
+    .resident-list.world-list::-webkit-scrollbar-track{background:#d9ceb0;border-left:2px solid var(--ink)}
+    .resident-list.world-list::-webkit-scrollbar-thumb{background:#8e8061;border:2px solid #d9ceb0}
     .resident-card{
       min-height:72px;
       cursor:pointer;
@@ -209,6 +221,40 @@
     .seal .nm{display:block;font-size:8px;font-weight:1000;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .goal-next{margin-top:9px;font-size:10px;line-height:1.45;color:#665e50;font-weight:800}
 
+    .resource-hud{
+      position:absolute;right:14px;top:14px;z-index:18;
+      max-width:min(280px,62%);
+      background:rgba(27,35,28,.92);color:#f5edcf;
+      border:2px solid #0f1510;box-shadow:3px 3px 0 rgba(0,0,0,.28);
+      padding:7px 9px;font-size:10px;line-height:1.35;font-weight:900;
+      pointer-events:none;
+    }
+    .resource-hud.ready{background:rgba(95,78,35,.95);color:#fff3bd;border-color:#2d281c}
+    .resource-hud .resource-big{font-size:12px;font-weight:1000}
+    .resource-hud .resource-small{opacity:.82;margin-top:2px;font-size:9px}
+
+    .ranking-podium{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;align-items:end;margin-bottom:8px}
+    .podium-card{
+      position:relative;min-width:0;text-align:center;border:2px solid var(--ink);
+      background:#e5d7ad;padding:8px 4px 7px;box-shadow:2px 2px 0 rgba(34,37,29,.23);cursor:pointer;
+    }
+    .podium-card.rank1{min-height:100px;background:#fff0b9;border-width:3px;padding-top:12px}
+    .podium-card.rank2{min-height:84px;background:#e9e5d7}
+    .podium-card.rank3{min-height:76px;background:#ddbd92}
+    .podium-card.active,.rank-row.active{outline:3px solid var(--gold);outline-offset:-3px}
+    .podium-medal{font-size:23px;line-height:1}
+    .podium-name{font-size:11px;font-weight:1000;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px}
+    .podium-score{font-size:15px;font-weight:1000;margin-top:3px;font-variant-numeric:tabular-nums}
+    .podium-label{font-size:8px;font-weight:900;color:#6b624f;margin-top:1px}
+    .rank-rest{display:grid;gap:4px;max-height:230px;overflow-y:auto;padding-right:4px;scrollbar-width:thin;scrollbar-color:#8e8061 #d9ceb0}
+    .rank-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:7px;align-items:center;border:2px solid #7e735c;background:#fff7df;padding:6px 7px;cursor:pointer}
+    .rank-num{font-size:11px;font-weight:1000;color:#756a53;text-align:center}
+    .rank-name{font-size:11px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .rank-score{font-size:12px;font-weight:1000;font-variant-numeric:tabular-nums}
+    .rank-me{border:2px solid var(--ink);background:#fff0bd;padding:10px;margin-bottom:8px;box-shadow:2px 2px 0 rgba(34,37,29,.2)}
+    .rank-me .big{font-size:19px;font-weight:1000}
+    .rank-me .small{font-size:10px;font-weight:800;color:#665e50;margin-top:3px}
+
     .footer-note{margin-top:14px;color:#d9e4d3;font-size:11px;line-height:1.55;text-align:center;opacity:.8}
 
     .toast{
@@ -231,6 +277,9 @@
       .canvas-frame{min-height:330px;aspect-ratio:1/1}
       .side{grid-template-columns:1fr}
       .resident-list{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .resident-list.world-list{max-height:360px}
+      .ranking-podium{gap:4px}
+      .resource-hud{right:9px;top:9px;max-width:72%;font-size:9px}
       select{min-width:135px;max-width:58vw}
     }
   </style>
@@ -275,7 +324,8 @@
           <div class="trait" id="speechTrait"></div>
           <div class="line" id="speechLine"></div>
         </div>
-        <div class="map-legend">월드맵을 살펴보고 주민들의 목소리도 들어보세요!</div>
+        <div class="resource-hud" id="resourceHud"><div class="resource-big">🎁 왕국 자원</div><div class="resource-small">3시간마다 자원이 나타납니다.</div></div>
+        <div class="map-legend">월드맵을 살펴보고 주민들의 목소리도 들어보세요! 떠 있는 자원도 눌러보세요.</div>
       </div>
     </section>
 
@@ -284,6 +334,12 @@
         <h2 id="sideTitle">세계의 왕국들</h2>
         <p class="hint" id="sideHint">왕국을 선택하면 그 학생의 직업 주민 12명을 확인할 수 있습니다.</p>
         <div class="resident-list" id="residentList"></div>
+      </section>
+
+      <section class="section pixel-panel" id="rankingSection">
+        <h2 id="rankingTitle">국가 경쟁력</h2>
+        <p class="hint" id="rankingHint">7개 자원의 평균값으로 왕국 순위를 계산합니다.</p>
+        <div id="ranking"></div>
       </section>
 
       <section class="section pixel-panel">
@@ -407,6 +463,24 @@
 
   const BASE_STATS = {population:8,happiness:20,economy:15,safety:18,civic:18,nature:25,territory:18};
 
+  // 3시간마다 왕국에 1개의 자원이 생성된다. 미수령 자원은 누적되지 않는다.
+  const RESOURCE_INTERVAL_MS = 3 * 60 * 60 * 1000;
+  const RESOURCE_STORAGE_KEY = `careerKingdom.resourceProgress.v1.${SHEET_ID}`;
+  const JOB_RESOURCE_AFFINITY = {
+    '교사':['civic','happiness'],
+    '건축가':['territory','safety'],
+    '유튜버':['economy','happiness'],
+    '제빵사':['happiness','economy'],
+    '수의사':['nature','safety'],
+    '소방관':['safety','civic'],
+    '기자':['civic','economy'],
+    '경찰관':['safety','civic'],
+    '패션 디자이너':['economy','nature'],
+    '요리사':['happiness','population'],
+    '운동선수':['population','happiness'],
+    '의사':['safety','population']
+  };
+
 
   // 개인 목표: 7개 국력 분야를 일정 수준 이상 키우면 왕관 조각을 획득한다.
   // 한 분야만 극단적으로 키우는 것보다 여러 관점을 경험하는 것이 유리하다.
@@ -496,7 +570,10 @@
   let activeStudent = WORLD_OPTION;
   let worldStates = [];
   let worldKingdoms = [];
+  let worldLinks = [];
   let worldEvents = [];
+  let resourceProgress = loadResourceProgress();
+  let resourceTimer = 0;
   let residents = [];
   let buildings = [];
   let hovered = null;
@@ -537,6 +614,134 @@
       h=Math.imul(h,16777619)>>>0;
     }
     return h>>>0;
+  }
+
+  function emptyResourceBonus(){
+    return Object.fromEntries(STAT_INFO.map(info=>[info.key,0]));
+  }
+
+  function loadResourceProgress(){
+    try{
+      const raw=localStorage.getItem(RESOURCE_STORAGE_KEY);
+      const parsed=raw?JSON.parse(raw):{};
+      return parsed && typeof parsed==='object' ? parsed : {};
+    }catch(_){
+      return {};
+    }
+  }
+
+  function saveResourceProgress(){
+    try{ localStorage.setItem(RESOURCE_STORAGE_KEY,JSON.stringify(resourceProgress)); }catch(_){}
+  }
+
+  function ensureResourceEntry(name){
+    const key=String(name||'').trim();
+    if(!resourceProgress[key] || typeof resourceProgress[key]!=='object'){
+      resourceProgress[key]={nextAt:0,pending:null,bonus:emptyResourceBonus(),collected:0};
+    }
+    const entry=resourceProgress[key];
+    if(!entry.bonus || typeof entry.bonus!=='object') entry.bonus=emptyResourceBonus();
+    STAT_INFO.forEach(info=>{
+      const n=Number(entry.bonus[info.key]);
+      entry.bonus[info.key]=Number.isFinite(n)?Math.max(0,Math.round(n)):0;
+    });
+    if(!Number.isFinite(Number(entry.nextAt))) entry.nextAt=0;
+    if(!Number.isFinite(Number(entry.collected))) entry.collected=0;
+    if(entry.pending && !STAT_INFO.some(info=>info.key===entry.pending.statKey)) entry.pending=null;
+    return entry;
+  }
+
+  function getResourceBonus(name){
+    return {...ensureResourceEntry(name).bonus};
+  }
+
+  function matchingJobsForResource(name,statKey){
+    const student=students[name];
+    if(!student) return [];
+    return Object.keys(student.jobs||{}).filter(job=>(JOB_RESOURCE_AFFINITY[job]||[]).includes(statKey));
+  }
+
+  function rollResourceDrop(name){
+    const info=STAT_INFO[Math.floor(Math.random()*STAT_INFO.length)] || STAT_INFO[0];
+    const matches=matchingJobsForResource(name,info.key);
+    let amount=1;
+    let boostedBy='';
+    if(matches.length){
+      const chance=Math.min(.45,.18+matches.length*.06);
+      if(Math.random()<chance){
+        amount=2;
+        boostedBy=matches[Math.floor(Math.random()*matches.length)] || matches[0];
+      }
+    }
+    return {statKey:info.key,amount,boostedBy,spawnedAt:Date.now()};
+  }
+
+  function refreshResourceAvailability(){
+    if(!students || !Object.keys(students).length){
+      updateResourceHud();
+      return false;
+    }
+    const now=Date.now();
+    let changed=false;
+    Object.keys(students).forEach(name=>{
+      const entry=ensureResourceEntry(name);
+      if(!entry.pending && now>=Number(entry.nextAt||0)){
+        entry.pending=rollResourceDrop(name);
+        changed=true;
+      }
+    });
+    if(changed) saveResourceProgress();
+    updateResourceHud();
+    return changed;
+  }
+
+  function formatRemaining(ms){
+    const sec=Math.max(0,Math.ceil(ms/1000));
+    const h=Math.floor(sec/3600);
+    const m=Math.floor((sec%3600)/60);
+    const s=sec%60;
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+
+  function resourceStatInfo(key){
+    return STAT_INFO.find(info=>info.key===key) || STAT_INFO[0];
+  }
+
+  function collectResourceFor(name){
+    const entry=ensureResourceEntry(name);
+    if(!entry.pending){
+      const remain=Math.max(0,Number(entry.nextAt||0)-Date.now());
+      showToast(`${name}의 다음 자원까지 ${formatRemaining(remain)}`);
+      return false;
+    }
+    const drop=entry.pending;
+    const info=resourceStatInfo(drop.statKey);
+    const amount=Math.max(1,Math.round(Number(drop.amount)||1));
+    entry.bonus[info.key]=(Number(entry.bonus[info.key])||0)+amount;
+    entry.collected=(Number(entry.collected)||0)+1;
+    entry.pending=null;
+    entry.nextAt=Date.now()+RESOURCE_INTERVAL_MS;
+    saveResourceProgress();
+
+    const synergy=drop.boostedBy ? ` · ${drop.boostedBy} 시너지!` : '';
+    showToast(`${kingdomDisplayName(name)} 자원 획득! ${info.icon} ${info.label} +${amount}${synergy}`);
+    rebuildWorld();
+    renderSelection();
+    updateResourceHud();
+    return true;
+  }
+
+  function competitivenessScore(state){
+    if(!state) return 0;
+    const avg=STAT_INFO.reduce((sum,info)=>sum+(Number(state.stats[info.key])||0),0)/STAT_INFO.length;
+    return Math.round(avg*10)/10;
+  }
+
+  function competitivenessRanking(){
+    return worldStates.slice().sort((a,b)=>{
+      const diff=competitivenessScore(b)-competitivenessScore(a);
+      return Math.abs(diff)>.0001 ? diff : a.name.localeCompare(b.name,'ko');
+    });
   }
 
   function makeKingdomProfile(state,index){
@@ -670,6 +875,9 @@
     }));
     stats.population+=customResidents.length;
 
+    const resourceBonus=getResourceBonus(student.name);
+    STAT_INFO.forEach(info=>{ stats[info.key]+=(resourceBonus[info.key]||0); });
+
     Object.keys(stats).forEach(k=>stats[k]=clamp(Math.round(stats[k])));
     const totalResidentCount=people.length+customResidents.length;
     const events=computeKingdomEvents(stats,totalResidentCount);
@@ -679,7 +887,7 @@
       Object.entries(ev.mod).forEach(([k,v])=>finalStats[k]=clamp(finalStats[k]+v));
     });
 
-    return {name:student.name,people,customResidents,baseStats:stats,stats:finalStats,events};
+    return {name:student.name,people,customResidents,resourceBonus,baseStats:stats,stats:finalStats,events};
   }
 
   function defaultQuote(job,type){
@@ -987,6 +1195,7 @@
   function useRows(rows,isDemo){
     sheetRows=rows;
     students=groupStudents(rows);
+    refreshResourceAvailability();
     rebuildWorld();
     populateStudentSelect(isDemo);
     if(firstWorldFit){
@@ -1021,18 +1230,194 @@
   // ─────────────────────────────────────────────
   // World layout
   // ─────────────────────────────────────────────
-  function spiralCoord(i){
-    if(i===0) return [0,0];
-    const k=Math.ceil((Math.sqrt(i+1)-1)/2);
-    let t=2*k+1;
-    let m=t*t-1;
-    t-=1;
-    if(i>=m-t) return [k-(m-i),-k];
-    m-=t;
-    if(i>=m-t) return [-k,-k+(m-i)];
-    m-=t;
-    if(i>=m-t) return [-k+(m-i),k];
-    return [k,k-(m-i-t)];
+  function buildWorldLayout(states){
+    const count=states.length;
+    if(!count) return [];
+
+    // 최대 40개 왕국을 염두에 두고, 8개씩 묶인 최대 5개 권역으로 나눈다.
+    // 권역 내부는 느슨한 군집, 권역 사이는 큰 교역로로 이어지게 설계한다.
+    const clusterCount=Math.max(1,Math.min(5,Math.ceil(count/8)));
+    const clusters=Array.from({length:clusterCount},()=>[]);
+    states.forEach((state,i)=>clusters[i%clusterCount].push({state,index:i}));
+
+    const baseSlots=[
+      [0,0],[1.08,-0.10],[-1.00,0.34],[0.34,1.03],
+      [-0.46,-0.96],[1.14,0.88],[-1.12,0.98],[0.08,-1.42]
+    ];
+    const layouts=[];
+    const worldRadius=clusterCount===1?0:(620+Math.max(0,clusterCount-2)*105);
+
+    clusters.forEach((bucket,ci)=>{
+      const cSeed=stringSeed(`cluster|${ci}|${count}`);
+      const angleBase=clusterCount===1?0:(-Math.PI/2 + ci*(Math.PI*2/clusterCount) + Math.sin(ci*1.73)*0.24);
+      const radius=clusterCount===1?0:(worldRadius*(0.92+((cSeed>>>4)%15)/100));
+      const centerX=Math.cos(angleBase)*radius;
+      const centerY=Math.sin(angleBase)*radius*0.70 + Math.sin(ci*2.17)*24;
+      const rotation=((cSeed%360)/180)*Math.PI;
+
+      const slots=baseSlots.map((p,si)=>[
+        p[0]+(randHash(ci,si,101)-.5)*0.16,
+        p[1]+(randHash(ci,si,102)-.5)*0.14
+      ]);
+      const slotOrder=slots.slice().sort((a,b)=>{
+        const av=stringSeed(`${ci}|${a[0].toFixed(2)}|${a[1].toFixed(2)}`);
+        const bv=stringSeed(`${ci}|${b[0].toFixed(2)}|${b[1].toFixed(2)}`);
+        return av-bv;
+      });
+
+      bucket.forEach((item,bi)=>{
+        const [sx,sy]=slotOrder[bi%slotOrder.length];
+        const cos=Math.cos(rotation), sin=Math.sin(rotation);
+        const rx=sx*cos - sy*sin;
+        const ry=sx*sin + sy*cos;
+        const sSeed=stringSeed(item.state.name);
+        const jitterX=(sSeed%41)-20;
+        const jitterY=((sSeed>>>8)%35)-17;
+        layouts.push({
+          name:item.state.name,
+          index:item.index,
+          cluster:ci,
+          cx:Math.round(centerX + rx*CELL_W*0.98 + jitterX),
+          cy:Math.round(centerY + ry*CELL_H*1.12 + jitterY)
+        });
+      });
+    });
+
+    return layouts.sort((a,b)=>a.index-b.index);
+  }
+
+  function resolveKingdomOverlaps(kingdoms){
+    if(kingdoms.length<2) return;
+    // 영토 외곽의 울퉁불퉁한 해안선까지 포함해 최소 간격을 확보한다.
+    // 40개 왕국까지 반복 충돌 해소를 적용해 어떤 왕국도 서로 겹치지 않게 한다.
+    const gap=52;
+    const maxIterations=220;
+    for(let iter=0;iter<maxIterations;iter++){
+      let moved=false;
+      for(let i=0;i<kingdoms.length;i++){
+        for(let j=i+1;j<kingdoms.length;j++){
+          const a=kingdoms[i], b=kingdoms[j];
+          const ac=kingdomCenter(a), bc=kingdomCenter(b);
+          let dx=bc.x-ac.x, dy=bc.y-ac.y;
+          if(dx===0 && dy===0){
+            const s=stringSeed(`${a.name}|${b.name}|separate`);
+            dx=(s&1)?1:-1;
+            dy=(s&2)?1:-1;
+          }
+          const needX=(a.rect.w+b.rect.w)/2 + gap;
+          const needY=(a.rect.h+b.rect.h)/2 + gap;
+          const overlapX=needX-Math.abs(dx);
+          const overlapY=needY-Math.abs(dy);
+          if(overlapX<=0 || overlapY<=0) continue;
+
+          // 더 적게 움직여도 분리되는 축으로 밀어낸다.
+          if(overlapX<overlapY){
+            const dir=dx>=0?1:-1;
+            const push=overlapX/2+1;
+            a.rect.x-=dir*push;
+            b.rect.x+=dir*push;
+          }else{
+            const dir=dy>=0?1:-1;
+            const push=overlapY/2+1;
+            a.rect.y-=dir*push;
+            b.rect.y+=dir*push;
+          }
+          moved=true;
+        }
+      }
+      if(!moved) break;
+    }
+
+    // 픽셀 좌표로 정리하고 중심 좌표도 갱신한다.
+    kingdoms.forEach(k=>{
+      k.rect.x=Math.round(k.rect.x);
+      k.rect.y=Math.round(k.rect.y);
+      k.cx=k.rect.x+k.rect.w/2;
+      k.cy=k.rect.y+k.rect.h/2;
+    });
+  }
+
+  function computeWorldLinks(kingdoms){
+    if(kingdoms.length<2) return [];
+    const links=[];
+    const seen=new Set();
+    const keyOf=(a,b)=>[a.name,b.name].sort().join('|');
+    const dist=(a,b)=>{
+      const ac=kingdomCenter(a), bc=kingdomCenter(b);
+      return Math.hypot(ac.x-bc.x,ac.y-bc.y);
+    };
+    const addLink=(a,b,kind='local')=>{
+      if(!a||!b||a===b) return;
+      const key=keyOf(a,b);
+      if(seen.has(key)) return;
+      seen.add(key);
+      links.push({a,b,kind});
+    };
+
+    const groups=new Map();
+    kingdoms.forEach(k=>{
+      if(!groups.has(k.cluster)) groups.set(k.cluster,[]);
+      groups.get(k.cluster).push(k);
+    });
+
+    // 각 권역 내부는 최소신장트리 + 가까운 보조 연결로 구성
+    for(const members of groups.values()){
+      if(members.length<=1) continue;
+      const connected=[members[0]];
+      const remaining=members.slice(1);
+      while(remaining.length){
+        let bestA=null,bestB=null,bestD=Infinity,bestI=-1;
+        connected.forEach(a=>remaining.forEach((b,i)=>{
+          const d=dist(a,b);
+          if(d<bestD){bestD=d;bestA=a;bestB=b;bestI=i;}
+        }));
+        addLink(bestA,bestB,'local');
+        connected.push(bestB);
+        remaining.splice(bestI,1);
+      }
+      members.forEach(m=>{
+        const local=members.filter(x=>x!==m).map(x=>({node:x,d:dist(m,x)})).sort((a,b)=>a.d-b.d);
+        const degree=links.filter(l=>l.a===m||l.b===m).length;
+        if(local[0] && degree<2) addLink(m,local[0].node,'local');
+        if(local[1] && degree<1 && local[1].d<CELL_W*1.05) addLink(m,local[1].node,'local');
+      });
+    }
+
+    const clusters=[...groups.entries()].map(([cluster,members])=>({
+      cluster,members,
+      x:members.reduce((a,m)=>a+kingdomCenter(m).x,0)/members.length,
+      y:members.reduce((a,m)=>a+kingdomCenter(m).y,0)/members.length
+    })).sort((a,b)=>Math.atan2(a.y,a.x)-Math.atan2(b.y,b.x));
+
+    // 권역 간은 굵은 교역로로 연결. 40개까지를 위한 5권역 구조를 염두에 둠.
+    const pairClosest=(A,B)=>{
+      let best=null,bestD=Infinity;
+      A.members.forEach(a=>B.members.forEach(b=>{
+        const d=dist(a,b);
+        if(d<bestD){bestD=d;best={a,b};}
+      }));
+      return best;
+    };
+
+    if(clusters.length===2){
+      const p=pairClosest(clusters[0],clusters[1]);
+      addLink(p.a,p.b,'artery');
+    }else if(clusters.length>2){
+      for(let i=0;i<clusters.length;i++){
+        const A=clusters[i], B=clusters[(i+1)%clusters.length];
+        const p=pairClosest(A,B);
+        addLink(p.a,p.b,'artery');
+      }
+      if(clusters.length>=4){
+        for(let i=0;i<clusters.length;i+=2){
+          const A=clusters[i], B=clusters[(i+2)%clusters.length];
+          const p=pairClosest(A,B);
+          if(p && dist(p.a,p.b)<CELL_W*2.9) addLink(p.a,p.b,'trade');
+        }
+      }
+    }
+
+    return links;
   }
 
   function rebuildWorld(){
@@ -1045,21 +1430,22 @@
 
     const names=Object.keys(students).sort((a,b)=>a.localeCompare(b,'ko'));
     worldStates=names.map(name=>buildState(students[name]));
+    const layout=buildWorldLayout(worldStates);
     worldKingdoms=worldStates.map((state,i)=>{
-      const [gx,gy]=spiralCoord(i);
+      const slot=layout[i] || {cx:0,cy:0,cluster:0};
       const profile=makeKingdomProfile(state,i);
-      const cx=gx*CELL_W;
-      const cy=gy*CELL_H;
-      const x=Math.round(cx-profile.w/2);
-      const y=Math.round(cy-profile.h/2);
-      return {name:state.name,state,index:i,gx,gy,profile,rect:{x,y,w:profile.w,h:profile.h}};
+      const x=Math.round(slot.cx-profile.w/2);
+      const y=Math.round(slot.cy-profile.h/2);
+      return {name:state.name,state,index:i,cluster:slot.cluster,cx:slot.cx,cy:slot.cy,profile,rect:{x,y,w:profile.w,h:profile.h}};
     });
+    resolveKingdomOverlaps(worldKingdoms);
+    worldLinks=computeWorldLinks(worldKingdoms);
 
     if(worldKingdoms.length){
-      const minX=Math.min(...worldKingdoms.map(k=>k.rect.x-26));
-      const minY=Math.min(...worldKingdoms.map(k=>k.rect.y-26));
-      const maxX=Math.max(...worldKingdoms.map(k=>k.rect.x+k.rect.w+26));
-      const maxY=Math.max(...worldKingdoms.map(k=>k.rect.y+k.rect.h+26));
+      const minX=Math.min(...worldKingdoms.map(k=>k.rect.x-60));
+      const minY=Math.min(...worldKingdoms.map(k=>k.rect.y-60));
+      const maxX=Math.max(...worldKingdoms.map(k=>k.rect.x+k.rect.w+60));
+      const maxY=Math.max(...worldKingdoms.map(k=>k.rect.y+k.rect.h+60));
       worldBounds={x:minX,y:minY,w:maxX-minX,h:maxY-minY};
     }else{
       worldBounds={x:-ZONE_W/2,y:-ZONE_H/2,w:ZONE_W,h:ZONE_H};
@@ -1070,6 +1456,7 @@
     lastMove=0;
     drawWorld(performance.now());
   }
+
 
 
   function prepareKingdomObjects(k){
@@ -1146,6 +1533,8 @@
       $('eventTitle').textContent=`${state.name}의 왕국 이벤트`;
       $('eventHint').textContent='조건을 만족한 이벤트는 실제 능력치를 올리거나 내리고, 지도 모습에도 영향을 줍니다.';
     }
+    renderRanking();
+    updateResourceHud();
   }
 
   function aggregateWorldStats(states){
@@ -1170,6 +1559,7 @@
 
   function renderKingdomCards(){
     const list=$('residentList');
+    list.classList.add('world-list');
     if(!worldKingdoms.length){list.innerHTML='<div class="empty">아직 왕국이 없습니다.</div>';return;}
     list.innerHTML=worldKingdoms.map(k=>{
       const s=k.state.stats;
@@ -1182,12 +1572,83 @@
   }
 
   function renderResidentCards(people){
+    const list=$('residentList');
+    list.classList.remove('world-list');
     const byJob=Object.fromEntries(people.map(p=>[p.job,p]));
-    $('residentList').innerHTML=JOBS.map(job=>{
+    list.innerHTML=JOBS.map(job=>{
       const p=byJob[job];
       if(!p) return `<div class="resident-card locked"><div class="mini">${JOB_ICON[job]}</div><div class="job">${job}</div><div class="trait">아직 오지 않은 주민</div><div class="quote">활동을 완료하면 왕국에 이주합니다.</div></div>`;
       return `<div class="resident-card"><div class="mini">${JOB_ICON[job]}</div><div class="job">${job}</div><div class="trait">${escapeHtml(p.trait)}</div><div class="quote">“${escapeHtml(p.quote)}”</div></div>`;
     }).join('');
+  }
+
+  function renderRanking(){
+    const root=$('ranking');
+    if(!root) return;
+    const ranked=competitivenessRanking();
+    if(!ranked.length){
+      root.innerHTML='<div class="empty">아직 경쟁력 순위를 계산할 왕국이 없습니다.</div>';
+      return;
+    }
+    $('rankingTitle').textContent='국가 경쟁력 순위';
+    $('rankingHint').textContent='인구·행복·경제·안전·시민의식·자연·영토 7개 수치의 평균입니다.';
+
+    const medal=['🥇','🥈','🥉'];
+    const podiumOrder=[1,0,2].filter(i=>ranked[i]);
+    const podium=podiumOrder.map(i=>{
+      const state=ranked[i];
+      const rank=i+1;
+      const active=activeStudent===state.name?' active':'';
+      return `<div class="podium-card rank${rank}${active}" data-rank-student="${escapeHtml(state.name)}"><div class="podium-medal">${medal[i]}</div><div class="podium-name">${escapeHtml(state.name)}</div><div class="podium-score">${competitivenessScore(state).toFixed(1)}</div><div class="podium-label">국가 경쟁력</div></div>`;
+    }).join('');
+
+    const rest=ranked.slice(3).map((state,i)=>{
+      const rank=i+4;
+      const active=activeStudent===state.name?' active':'';
+      return `<div class="rank-row${active}" data-rank-student="${escapeHtml(state.name)}"><div class="rank-num">${rank}위</div><div class="rank-name">${escapeHtml(state.name)}의 왕국</div><div class="rank-score">${competitivenessScore(state).toFixed(1)}</div></div>`;
+    }).join('');
+
+    let myHtml='';
+    if(activeStudent!==WORLD_OPTION){
+      const myIndex=ranked.findIndex(s=>s.name===activeStudent);
+      if(myIndex>=0){
+        const me=ranked[myIndex];
+        myHtml=`<div class="rank-me"><div class="big">${myIndex+1}위 · ${competitivenessScore(me).toFixed(1)}</div><div class="small">${escapeHtml(me.name)}의 현재 국가 경쟁력</div></div>`;
+      }
+    }
+
+    root.innerHTML=`${myHtml}<div class="ranking-podium">${podium}</div>${rest?`<div class="rank-rest">${rest}</div>`:''}`;
+    root.querySelectorAll('[data-rank-student]').forEach(el=>{
+      el.addEventListener('click',()=>selectKingdom(el.dataset.rankStudent,true));
+    });
+  }
+
+  function updateResourceHud(){
+    const hud=$('resourceHud');
+    if(!hud) return;
+    if(!students || !Object.keys(students).length){
+      hud.classList.remove('ready');
+      hud.innerHTML='<div class="resource-big">🎁 왕국 자원</div><div class="resource-small">시트 연결 후 자원이 생성됩니다.</div>';
+      return;
+    }
+    const now=Date.now();
+    if(activeStudent===WORLD_OPTION){
+      const names=Object.keys(students);
+      const ready=names.filter(name=>!!ensureResourceEntry(name).pending).length;
+      hud.classList.toggle('ready',ready>0);
+      hud.innerHTML=`<div class="resource-big">🎁 수확 가능 ${ready} / ${names.length}</div><div class="resource-small">미수령 자원은 쌓이지 않습니다 · 수령 후 3시간 재생성</div>`;
+      return;
+    }
+    const entry=ensureResourceEntry(activeStudent);
+    if(entry.pending){
+      const info=resourceStatInfo(entry.pending.statKey);
+      hud.classList.add('ready');
+      hud.innerHTML=`<div class="resource-big">${info.icon} ${info.label} +${entry.pending.amount} 도착!</div><div class="resource-small">왕국 위의 아이콘을 눌러 획득하세요.${entry.pending.boostedBy?` · ${escapeHtml(entry.pending.boostedBy)} 시너지`:''}</div>`;
+    }else{
+      const remain=Math.max(0,Number(entry.nextAt||0)-now);
+      hud.classList.remove('ready');
+      hud.innerHTML=`<div class="resource-big">🎁 다음 자원 ${formatRemaining(remain)}</div><div class="resource-small">수령할 때마다 3시간 카운트가 다시 시작됩니다.</div>`;
+    }
   }
 
   function renderGoals(state,isWorld){
@@ -1240,7 +1701,7 @@
     const pad=70;
     camera.x=worldBounds.x+worldBounds.w/2;
     camera.y=worldBounds.y+worldBounds.h/2;
-    camera.zoom=clamp(Math.min(WORLD_W/(worldBounds.w+pad*2),WORLD_H/(worldBounds.h+pad*2)),0.28,1.45);
+    camera.zoom=clamp(Math.min(WORLD_W/(worldBounds.w+pad*2),WORLD_H/(worldBounds.h+pad*2)),0.14,1.45);
   }
 
   function focusSelectedKingdom(){
@@ -1297,8 +1758,121 @@
     worldKingdoms.forEach(drawKingdomPopulation);
     residents.forEach(drawResident);
     ctx.restore();
+    drawResourceDrops(now);
 
     raf=requestAnimationFrame(drawWorld);
+  }
+
+  function resourceWorldPoint(k){
+    const patterns=[[.76,.72],[.68,.78],[.82,.58],[.61,.70],[.77,.82]];
+    const pos=patterns[k.profile.seed%patterns.length];
+    return {x:k.rect.x+k.rect.w*pos[0],y:k.rect.y+k.rect.h*pos[1]};
+  }
+
+  function worldToScreenPoint(x,y){
+    return {
+      sx:WORLD_W/2+(x-camera.x)*camera.zoom,
+      sy:WORLD_H/2+(y-camera.y)*camera.zoom
+    };
+  }
+
+  function resourceDropScreen(k,now=performance.now()){
+    const w=resourceWorldPoint(k);
+    const s=worldToScreenPoint(w.x,w.y);
+    const bob=Math.sin(now/360+(k.profile.seed%17))*3;
+    return {sx:s.sx,sy:s.sy+bob,wx:w.x,wy:w.y};
+  }
+
+  function drawResourceDrops(now){
+    ctx.save();
+    ctx.textAlign='center';
+    ctx.textBaseline='middle';
+    worldKingdoms.forEach(k=>{
+      const entry=ensureResourceEntry(k.name);
+      if(!entry.pending) return;
+      const p=resourceDropScreen(k,now);
+      if(p.sx<-40||p.sy<-40||p.sx>WORLD_W+40||p.sy>WORLD_H+40) return;
+      const info=resourceStatInfo(entry.pending.statKey);
+      const selected=activeStudent===k.name;
+      const size=selected?17:14;
+      const pulse=1+Math.sin(now/240+(k.profile.seed%11))*.06;
+      const halo=selected?7:5;
+      ctx.save();
+      ctx.translate(Math.round(p.sx),Math.round(p.sy));
+      ctx.scale(pulse,pulse);
+
+      // 그림자
+      ctx.beginPath();
+      ctx.fillStyle='rgba(20,25,19,.28)';
+      ctx.ellipse(2, size+7, size*0.9, 5, 0, 0, Math.PI*2);
+      ctx.fill();
+
+      // 바깥 광륜
+      ctx.beginPath();
+      ctx.fillStyle=selected?'rgba(255,243,191,.30)':'rgba(255,248,221,.18)';
+      ctx.arc(0,0,size+halo,0,Math.PI*2);
+      ctx.fill();
+
+      // 메인 원형 아이콘
+      ctx.beginPath();
+      ctx.fillStyle='#26221b';
+      ctx.arc(0,0,size+2,0,Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.fillStyle=info.color;
+      ctx.arc(0,0,size,0,Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.fillStyle='rgba(255,248,218,.26)';
+      ctx.arc(-size*0.24,-size*0.26,size*0.72,Math.PI*1.15,Math.PI*1.9);
+      ctx.strokeStyle='rgba(255,248,218,.26)';
+      ctx.lineWidth=3;
+      ctx.stroke();
+
+      // 이모지 아이콘
+      ctx.font=`${selected?'17':'14'}px "Segoe UI Emoji","Apple Color Emoji",sans-serif`;
+      ctx.fillText(info.icon,0,1);
+
+      // +1 / +2 말풍선 칩
+      const chipW=entry.pending.amount>1?22:18;
+      const chipH=12;
+      const chipX=size-3;
+      const chipY=size-7;
+      ctx.beginPath();
+      ctx.fillStyle='#fff6d9';
+      ctx.roundRect(chipX,chipY,chipW,chipH,4);
+      ctx.fill();
+      ctx.strokeStyle='#3a3328';
+      ctx.lineWidth=1.5;
+      ctx.stroke();
+      ctx.fillStyle='#28251f';
+      ctx.font='900 8px Pretendard, sans-serif';
+      ctx.fillText(`+${entry.pending.amount}`,chipX+chipW/2,chipY+chipH/2+0.5);
+
+      // 시너지 별
+      if(entry.pending.boostedBy){
+        ctx.beginPath();
+        ctx.fillStyle='#f3d66c';
+        ctx.moveTo(-size-3,-size-1);
+        ctx.lineTo(-size+0.5,-size+1.2);
+        ctx.lineTo(-size+3.8,-size-1);
+        ctx.lineTo(-size+1.3,-size+2.2);
+        ctx.lineTo(-size+4.5,-size+5.4);
+        ctx.lineTo(-size+0.5,-size+4.1);
+        ctx.lineTo(-size-3.5,-size+5.4);
+        ctx.lineTo(-size-1.1,-size+2.2);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // 가벼운 반짝임
+      ctx.fillStyle='rgba(255,248,221,.85)';
+      ctx.fillRect(-size-5,-size+3,2,2);
+      ctx.fillRect(size+5,-size+6,2,2);
+      ctx.fillRect(-2,-size-6,2,2);
+      ctx.restore();
+    });
+    ctx.restore();
   }
 
   function drawScreenWater(){
@@ -1313,6 +1887,21 @@
   }
 
   function kingdomCenter(k){ return {x:k.rect.x+k.rect.w/2,y:k.rect.y+k.rect.h/2}; }
+
+  function routeShape(link){
+    const a=kingdomCenter(link.a), b=kingdomCenter(link.b);
+    const dx=b.x-a.x, dy=b.y-a.y;
+    const len=Math.max(1,Math.hypot(dx,dy));
+    const nx=-dy/len, ny=dx/len;
+    const seed=stringSeed(`${link.a.name}|${link.b.name}|route`);
+    const bend=Math.min(110,len*0.16)*(0.55+((seed>>>5)%35)/100)*((seed&1)?1:-1);
+    const cx=(a.x+b.x)/2 + nx*bend;
+    const cy=(a.y+b.y)/2 + ny*bend;
+    const midX=(a.x+2*cx+b.x)/4;
+    const midY=(a.y+2*cy+b.y)/4;
+    const angle=Math.atan2((b.y-cy)+(cy-a.y),(b.x-cx)+(cx-a.x));
+    return {a,b,cx,cy,midX,midY,angle,len};
+  }
 
   function blobPoints(k,inset=0){
     const c=kingdomCenter(k);
@@ -1343,29 +1932,43 @@
   }
 
   function drawContinentConnections(){
-    if(!worldKingdoms.length) return;
-    const byCoord=new Map(worldKingdoms.map(k=>[`${k.gx},${k.gy}`,k]));
+    if(!worldLinks.length) return;
     ctx.save();
     ctx.lineCap='round';
     ctx.lineJoin='round';
-    worldKingdoms.forEach(k=>{
-      const a=kingdomCenter(k);
-      [[1,0],[0,1]].forEach(([dx,dy])=>{
-        const bK=byCoord.get(`${k.gx+dx},${k.gy+dy}`);
-        if(!bK) return;
-        const b=kingdomCenter(bK);
-        const avgT=(k.state.stats.territory+bK.state.stats.territory)/2;
-        const outerW=58+Math.min(24,avgT*.24);
-        const innerW=outerW-8;
-        ctx.strokeStyle='#594936';ctx.lineWidth=outerW;
-        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
-        const g=ctx.createLinearGradient(a.x,a.y,b.x,b.y);
-        g.addColorStop(0,k.profile.palette.base);
-        g.addColorStop(.5,'#869064');
-        g.addColorStop(1,bK.profile.palette.base);
-        ctx.strokeStyle=g;ctx.lineWidth=innerW;
-        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
-      });
+    worldLinks.forEach(link=>{
+      const route=routeShape(link);
+      const avgT=(link.a.state.stats.territory+link.b.state.stats.territory)/2;
+      const avgNature=(link.a.state.stats.nature+link.b.state.stats.nature)/2;
+      const avgEco=(link.a.state.stats.economy+link.b.state.stats.economy)/2;
+      const isArtery=link.kind==='artery';
+      const outerW=(isArtery?62:54)+Math.min(18,avgT*0.18);
+      const innerW=outerW-(isArtery?10:8);
+      const roadW=Math.max(6,innerW*0.22 + (link.kind==='trade'?1:0));
+
+      ctx.strokeStyle='#594936';ctx.lineWidth=outerW;
+      ctx.beginPath();ctx.moveTo(route.a.x,route.a.y);ctx.quadraticCurveTo(route.cx,route.cy,route.b.x,route.b.y);ctx.stroke();
+
+      const g=ctx.createLinearGradient(route.a.x,route.a.y,route.b.x,route.b.y);
+      g.addColorStop(0,link.a.profile.palette.base);
+      g.addColorStop(.5,isArtery?'#899568':'#7e8760');
+      g.addColorStop(1,link.b.profile.palette.base);
+      ctx.strokeStyle=g;ctx.lineWidth=innerW;
+      ctx.beginPath();ctx.moveTo(route.a.x,route.a.y);ctx.quadraticCurveTo(route.cx,route.cy,route.b.x,route.b.y);ctx.stroke();
+
+      ctx.strokeStyle=avgEco>=50?'#b18a58':'#a37f53';ctx.lineWidth=roadW;
+      ctx.beginPath();ctx.moveTo(route.a.x,route.a.y);ctx.quadraticCurveTo(route.cx,route.cy,route.b.x,route.b.y);ctx.stroke();
+
+      // 질감용 작은 점들
+      for(let i=1;i<=3;i++){
+        const t=i/4;
+        const x=(1-t)*(1-t)*route.a.x + 2*(1-t)*t*route.cx + t*t*route.b.x;
+        const y=(1-t)*(1-t)*route.a.y + 2*(1-t)*t*route.cy + t*t*route.b.y;
+        ctx.fillStyle=i%2?'rgba(72,62,46,.25)':'rgba(239,224,170,.20)';
+        ctx.fillRect(x-1,y-1,2,2);
+      }
+      if(avgNature>=55){ drawTree(route.midX-14,route.midY+12); drawTree(route.midX+16,route.midY+10); }
+      if(avgEco>=60){ ctx.fillStyle='#d2a24b';ctx.fillRect(route.midX-3,route.midY-2,6,4); }
     });
     worldKingdoms.forEach(k=>{
       tracePolygon(blobPoints(k,-4));
@@ -1696,34 +2299,25 @@
 
 
   function drawInterKingdomDecor(){
-    if(worldKingdoms.length<2) return;
-    const byCoord=new Map(worldKingdoms.map(k=>[`${k.gx},${k.gy}`,k]));
-    worldKingdoms.forEach(k=>{
-      const right=byCoord.get(`${k.gx+1},${k.gy}`);
-      const down=byCoord.get(`${k.gx},${k.gy+1}`);
-      if(right) drawBorderGate(k,right,'v');
-      if(down) drawBorderGate(k,down,'h');
-    });
+    if(!worldLinks.length) return;
+    worldLinks.forEach(link=>drawBorderGate(link));
   }
 
-  function drawBorderGate(a,b,dir){
-    const eco=(a.state.stats.economy+b.state.stats.economy)/2;
-    const nature=(a.state.stats.nature+b.state.stats.nature)/2;
+  function drawBorderGate(link){
+    const eco=(link.a.state.stats.economy+link.b.state.stats.economy)/2;
+    const nature=(link.a.state.stats.nature+link.b.state.stats.nature)/2;
     const allied=allianceProgress(worldStates).ratio>=1;
-    const ca=kingdomCenter(a),cb=kingdomCenter(b);
-    const x=(ca.x+cb.x)/2;
-    const y=(ca.y+cb.y)/2;
-    if(dir==='v'){
-      ctx.fillStyle=allied?'#b58a37':'#6c5940';ctx.fillRect(x-2,y-9,4,18);
-      ctx.fillStyle='#d8c18b';ctx.fillRect(x-7,y-2,14,4);
-      if(eco>=55){ctx.fillStyle='#d0a14d';ctx.fillRect(x-6,y-14,12,4);}
-      if(nature>=55){drawTree(x-12,y+20);drawTree(x+12,y+20);}
-    }else{
-      ctx.fillStyle=allied?'#b58a37':'#6c5940';ctx.fillRect(x-9,y-2,18,4);
-      ctx.fillStyle='#d8c18b';ctx.fillRect(x-2,y-7,4,14);
-      if(eco>=55){ctx.fillStyle='#d0a14d';ctx.fillRect(x-14,y-6,4,12);}
-      if(nature>=55){drawTree(x-20,y-10);drawTree(x+20,y-10);}
-    }
+    const r=routeShape(link);
+    ctx.save();
+    ctx.translate(r.midX,r.midY);
+    ctx.rotate(r.angle);
+    ctx.fillStyle='rgba(43,39,30,.55)';ctx.fillRect(-12,-10,24,20);
+    ctx.fillStyle=allied?'#b58a37':'#6c5940';ctx.fillRect(-10,-8,20,16);
+    ctx.fillStyle='#d8c18b';ctx.fillRect(-2,-12,4,24);ctx.fillRect(-12,-2,24,4);
+    if(eco>=55){ctx.fillStyle='#d0a14d';ctx.fillRect(-9,-14,18,4);}
+    if(link.kind==='artery'){ctx.fillStyle='rgba(241,219,127,.65)';ctx.fillRect(-14,-1,28,2);}
+    ctx.restore();
+    if(nature>=55){drawTree(r.midX-18,r.midY+14);drawTree(r.midX+18,r.midY+14);}
   }
 
 
@@ -1980,6 +2574,19 @@
     return best;
   }
 
+  function findResourceDrop(pt,touch=false){
+    let best=null,dist=Infinity;
+    const threshold=touch?30:22;
+    worldKingdoms.forEach(k=>{
+      const entry=ensureResourceEntry(k.name);
+      if(!entry.pending) return;
+      const pos=resourceDropScreen(k,performance.now());
+      const d=Math.hypot(pt.sx-pos.sx,pt.sy-pos.sy);
+      if(d<threshold && d<dist){dist=d;best=k;}
+    });
+    return best;
+  }
+
   function findKingdom(pt){
     return worldKingdoms.find(k=>pointInPolygon(pt.x,pt.y,blobPoints(k,1)))||null;
   }
@@ -2002,6 +2609,13 @@
 
   function handleCanvasTap(clientX,clientY,preferredResident=null,isTouch=false){
     const pt=clientCanvasPoint(clientX,clientY);
+    const resourceKingdom=findResourceDrop(pt,isTouch);
+    if(resourceKingdom){
+      pinned=null;
+      hideSpeech();
+      collectResourceFor(resourceKingdom.name);
+      return;
+    }
     const p=preferredResident || findResident(pt,isTouch);
     if(p){
       pinned=(pinned===p?null:p);
@@ -2255,6 +2869,13 @@
   $('zoomInBtn').addEventListener('click',()=>changeZoom(1.22));
 
   setCanvasCursor();
+  resourceTimer=window.setInterval(()=>refreshResourceAvailability(),1000);
+  window.addEventListener('storage',ev=>{
+    if(ev.key!==RESOURCE_STORAGE_KEY) return;
+    resourceProgress=loadResourceProgress();
+    refreshResourceAvailability();
+    if(Object.keys(students).length){rebuildWorld();renderSelection();}
+  });
   loadGoogleSheet();
 })();
 </script>
