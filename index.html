@@ -637,10 +637,11 @@
   function ensureResourceEntry(name){
     const key=String(name||'').trim();
     if(!resourceProgress[key] || typeof resourceProgress[key]!=='object'){
-      resourceProgress[key]={nextAt:0,pending:null,bonus:emptyResourceBonus(),collected:0};
+      resourceProgress[key]={nextAt:0,pending:null,bonus:emptyResourceBonus(),collected:0,levelUps:{}};
     }
     const entry=resourceProgress[key];
     if(!entry.bonus || typeof entry.bonus!=='object') entry.bonus=emptyResourceBonus();
+    if(!entry.levelUps || typeof entry.levelUps!=='object' || Array.isArray(entry.levelUps)) entry.levelUps={};
     STAT_INFO.forEach(info=>{
       const n=Number(entry.bonus[info.key]);
       entry.bonus[info.key]=Number.isFinite(n)?Math.max(0,Math.round(n)):0;
@@ -653,6 +654,42 @@
 
   function getResourceBonus(name){
     return {...ensureResourceEntry(name).bonus};
+  }
+
+  function residentUpgradeKey(row){
+    if(row && JOBS.includes(row.직업)) return `job:${row.직업}`;
+    return row && row._index!==undefined ? `custom:${row._index}:${row.직업}` : String(row?.직업||'');
+  }
+
+  function getResidentLevelWithUpgrades(kingdomName,row,baseLevel){
+    const entry=ensureResourceEntry(kingdomName);
+    const key=residentUpgradeKey(row);
+    const upgrades=Math.max(0,Math.floor(Number(entry.levelUps[key])||0));
+    return Math.min(10,normalizeLevel(baseLevel)+upgrades);
+  }
+
+  // 자원을 3번 획득할 때마다 왕국 주민 중 한 명을 무작위로 레벨업시킵니다.
+  function tryRandomResidentLevelUp(kingdomName,entry){
+    if((Number(entry.collected)||0)%3!==0) return null;
+    const student=students[kingdomName];
+    if(!student) return null;
+    const candidates=[];
+    Object.values(student.jobs||{}).forEach(row=>{
+      const key=residentUpgradeKey(row);
+      const base=normalizeLevel(row.레벨);
+      const current=Math.min(10,base+Math.max(0,Math.floor(Number(entry.levelUps[key])||0)));
+      if(current<10) candidates.push({key,row,level:current,job:row.직업});
+    });
+    (student.customResidents||[]).forEach(row=>{
+      const key=residentUpgradeKey(row);
+      const base=normalizeLevel(row.레벨);
+      const current=Math.min(10,base+Math.max(0,Math.floor(Number(entry.levelUps[key])||0)));
+      if(current<10) candidates.push({key,row,level:current,job:row.직업});
+    });
+    if(!candidates.length) return {maxed:true};
+    const chosen=candidates[Math.floor(Math.random()*candidates.length)];
+    entry.levelUps[chosen.key]=(Number(entry.levelUps[chosen.key])||0)+1;
+    return {job:chosen.job,from:chosen.level,to:chosen.level+1};
   }
 
   function matchingJobsForResource(name,statKey){
@@ -719,12 +756,16 @@
     const amount=Math.max(1,Math.round(Number(drop.amount)||1));
     entry.bonus[info.key]=(Number(entry.bonus[info.key])||0)+amount;
     entry.collected=(Number(entry.collected)||0)+1;
+    const levelUp=tryRandomResidentLevelUp(name,entry);
     entry.pending=null;
     entry.nextAt=Date.now()+RESOURCE_INTERVAL_MS;
     saveResourceProgress();
 
     const synergy=drop.boostedBy ? ` · ${drop.boostedBy} 시너지!` : '';
-    showToast(`${kingdomDisplayName(name)} 자원 획득! ${info.icon} ${info.label} +${amount}${synergy}`);
+    const levelMessage=levelUp && levelUp.job
+      ? ` ✨ ${levelUp.job} 레벨 업! Lv.${levelUp.from} → Lv.${levelUp.to}`
+      : levelUp && levelUp.maxed ? ' · 모든 주민이 최고 레벨입니다.' : '';
+    showToast(`${kingdomDisplayName(name)} 자원 획득! ${info.icon} ${info.label} +${amount}${synergy}${levelMessage}`);
     rebuildWorld();
     renderSelection();
     updateResourceHud();
@@ -817,6 +858,14 @@
     return '';
   }
 
+  function normalizeLevel(value){
+    const n=Number(String(value??'').trim());
+    return Number.isFinite(n) && String(value??'').trim()!=='' ? clamp(Math.round(n),1,10) : 1;
+  }
+
+  // 레벨 1은 기존 성능을 그대로 유지한다. 레벨마다 직업 효과를 6%씩 강화한다.
+  function levelPower(level){ return 1 + (normalizeLevel(level)-1)*0.06; }
+
   function normalizeRows(rows){
     return rows.map((r,index)=>({
       _index:index,
@@ -825,6 +874,8 @@
       q1:pick(r,['질문 1','질문1','Q1']),
       q2:pick(r,['질문 2','질문2','Q2']),
       q3:pick(r,['질문 3','질문3','Q3']),
+      // 레벨은 열 제목을 우선 사용하고, 제목이 없으면 I열(9번째 값)을 읽는다.
+      레벨:normalizeLevel(pick(r,['레벨','Level','level','Lv','LV']) || Object.values(r)[8]),
       추천:String(pick(r,['추천 성향','추천성향'])).trim(),
       판단:String(pick(r,['선생님 판단 성향','선생님판단성향','최종 성향','최종성향'])).trim(),
       한마디:String(pick(r,['학생 한마디','학생한마디','한마디'])).trim()
@@ -853,25 +904,33 @@
       const row=student.jobs[job];
       if(!row) return;
       const trait=resolveTrait(row);
-      STAT_INFO.forEach((s,i)=>{ stats[s.key]+=trait.effect[i]; });
+      const level=getResidentLevelWithUpgrades(student.name,row,row.레벨);
+      const power=levelPower(level);
+      const scaledEffect=trait.effect.map(v=>Math.round(v*power));
+      STAT_INFO.forEach((s,i)=>{ stats[s.key]+=scaledEffect[i]; });
       people.push({
         job,
+        level,
+        power,
         trait:trait.name,
         type:trait.type,
         quote:row.한마디 || defaultQuote(job,trait.type),
-        effect:trait.effect.slice(),
+        effect:scaledEffect,
+        baseEffect:trait.effect.slice(),
         building:JOB_BUILDING[job]
       });
     });
 
     const customResidents=(student.customResidents||[]).map((row,i)=>({
       job:row.직업,
+      level:getResidentLevelWithUpgrades(student.name,{...row,_index:row._index},row.레벨),
+      power:levelPower(getResidentLevelWithUpgrades(student.name,{...row,_index:row._index},row.레벨)),
       trait:'왕국 주민',
       quote:row.한마디 || '반가워!',
       custom:true,
       variant:(stringSeed(`${student.name}|${row.직업}|${row._index}|resident`)%5)+1,
       rowIndex:row._index,
-      effect:[1,0,0,0,0,0,0]
+      effect:[Math.round(1*levelPower(getResidentLevelWithUpgrades(student.name,{...row,_index:row._index},row.레벨))),0,0,0,0,0,0]
     }));
     stats.population+=customResidents.length;
 
@@ -1465,10 +1524,10 @@
       const pos=k.profile.positions[p.job]||[.5,.5];
       const bx=Math.round(r.x+22+pos[0]*(r.w-52));
       const by=Math.round(r.y+30+pos[1]*(r.h-52));
-      buildings.push({kingdom:k.name,job:p.job,x:bx-3,y:by-2,w:34,h:27,data:p});
+      buildings.push({kingdom:k.name,job:p.job,level:p.level||1,x:bx-3,y:by-2,w:34,h:27,data:p});
       const jitter=(i%3)*3;
       residents.push({
-        kingdom:k.name,job:p.job,trait:p.trait,quote:p.quote,type:p.type,
+        kingdom:k.name,job:p.job,trait:p.trait,quote:p.quote,type:p.type,level:p.level||1,
         x:bx+5+jitter,y:by+29+(i%2)*4,tx:bx+7,ty:by+31,
         minX:r.x+10,maxX:r.x+r.w-10,minY:r.y+26,maxY:r.y+r.h-10
       });
@@ -1481,7 +1540,7 @@
       const x=Math.round(r.x+18+px*(r.w-36));
       const y=Math.round(r.y+30+py*(r.h-48));
       residents.push({
-        kingdom:k.name,job:p.job,trait:p.trait,quote:p.quote,
+        kingdom:k.name,job:p.job,trait:p.trait,quote:p.quote,level:p.level||1,
         custom:true,variant:p.variant,
         x,y,tx:x,ty:y,
         minX:r.x+12,maxX:r.x+r.w-12,minY:r.y+28,maxY:r.y+r.h-12
@@ -1578,7 +1637,7 @@
     list.innerHTML=JOBS.map(job=>{
       const p=byJob[job];
       if(!p) return `<div class="resident-card locked"><div class="mini">${JOB_ICON[job]}</div><div class="job">${job}</div><div class="trait">아직 오지 않은 주민</div><div class="quote">활동을 완료하면 왕국에 이주합니다.</div></div>`;
-      return `<div class="resident-card"><div class="mini">${JOB_ICON[job]}</div><div class="job">${job}</div><div class="trait">${escapeHtml(p.trait)}</div><div class="quote">“${escapeHtml(p.quote)}”</div></div>`;
+      return `<div class="resident-card"><div class="mini">${JOB_ICON[job]}</div><div class="job">${job}</div><div class="trait">${escapeHtml(p.trait)} · Lv.${p.level||1}</div><div class="quote">“${escapeHtml(p.quote)}”</div></div>`;
     }).join('');
   }
 
@@ -1636,7 +1695,7 @@
       const names=Object.keys(students);
       const ready=names.filter(name=>!!ensureResourceEntry(name).pending).length;
       hud.classList.toggle('ready',ready>0);
-      hud.innerHTML=`<div class="resource-big">🎁 수확 가능 ${ready} / ${names.length}</div><div class="resource-small">미수령 자원은 쌓이지 않습니다 · 수령 후 3시간 재생성</div>`;
+      hud.innerHTML=`<div class="resource-big">🎁 수확 가능 ${ready} / ${names.length}</div><div class="resource-small">자원 3회 획득마다 주민 1명 무작위 레벨업 · 미수령 자원은 쌓이지 않습니다</div>`;
       return;
     }
     const entry=ensureResourceEntry(activeStudent);
@@ -2405,6 +2464,44 @@
         if(type===1){ctx.fillStyle=theme.light;ctx.fillRect(x+24,y+9,4,6);} else if(type===2){ctx.fillStyle=theme.accent;ctx.fillRect(x+2,y+9,4,8);} else {ctx.fillStyle=theme.accent;ctx.fillRect(x+4,y+20,10,2);}
         break;
     }
+
+    // 레벨별 건물 승급 장식: 직업 고유 실루엣/색상은 유지하고 장식만 추가한다.
+    const level=normalizeLevel(b.level||b.data?.level||1);
+    if(level>=2){
+      ctx.fillStyle=level>=8?'#ffe58a':level>=5?'#e6c56a':'#d8d0a1';
+      ctx.fillRect(x-2,y+5,w+4,2); // 지붕 테두리
+      ctx.fillRect(x+1,y+h-2,w-2,2); // 기단 장식
+    }
+    if(level>=4){
+      // 양쪽 깃발 장식
+      ctx.fillStyle=level>=8?'#f4d56d':'#e8e0bd';
+      ctx.fillRect(x-5,y-4,2,8);
+      ctx.fillRect(x+w+3,y-4,2,8);
+      ctx.fillRect(x-3,y-4,5,3);
+      ctx.fillRect(x+w+1,y-4,5,3);
+    }
+    if(level>=7){
+      // 고급 건물의 보석/금속 장식
+      ctx.fillStyle='#f7df83';
+      ctx.fillRect(x+w/2-2,y-7,5,3);
+      ctx.fillStyle='#fff5c4';
+      ctx.fillRect(x+w/2-1,y-6,2,1);
+    }
+    if(level>=10){
+      // 최고 레벨 전용 왕관 표식
+      ctx.fillStyle='#352b1b';ctx.fillRect(x+w-9,y-12,12,7);
+      ctx.fillStyle='#f4d15f';ctx.fillRect(x+w-8,y-11,10,5);
+      ctx.fillRect(x+w-8,y-13,2,3);ctx.fillRect(x+w-4,y-15,2,5);ctx.fillRect(x,y-13,2,3);
+    }
+    // 레벨 배지
+    if(level>=2){
+      const badgeX=x+w-5, badgeY=y+h-1;
+      ctx.fillStyle='#29261f';ctx.fillRect(badgeX-1,badgeY-1,12,9);
+      ctx.fillStyle=level>=8?'#ffe58a':level>=5?'#f0d07a':'#fff1c5';
+      ctx.fillRect(badgeX,badgeY,10,7);
+      ctx.fillStyle='#332a1b';ctx.font='900 6px Pretendard, sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText(String(level),badgeX+5,badgeY+3.5);ctx.textAlign='left';ctx.textBaseline='alphabetic';
+    }
   }
 
 
@@ -2430,8 +2527,22 @@
   }
 
   function drawResident(p){
-    if(p.custom) drawPlainResident(Math.round(p.x),Math.round(p.y),p.variant||1,1);
-    else drawJobResident(Math.round(p.x),Math.round(p.y),p.job,p.type,1);
+    const level=normalizeLevel(p.level||1);
+    const scale=1+(level-1)*0.018; // 최대 1.162배: 더 돋보이되 주민 간 겹침은 최소화
+    ctx.save();
+    ctx.translate(Math.round(p.x),Math.round(p.y));
+    ctx.scale(scale,scale);
+    if(p.custom) drawPlainResident(0,0,p.variant||1,1);
+    else drawJobResident(0,0,p.job,p.type,1);
+    ctx.restore();
+    if(level>=5){
+      ctx.save();
+      ctx.fillStyle=level>=8?'#ffe58a':'#f1d47a';
+      ctx.fillRect(Math.round(p.x)+5,Math.round(p.y)-12,2,2);
+      ctx.fillRect(Math.round(p.x)-7,Math.round(p.y)-10,2,2);
+      if(level>=10){ctx.fillRect(Math.round(p.x)-1,Math.round(p.y)-15,3,3);}
+      ctx.restore();
+    }
   }
 
   function drawPlainResident(x,y,variant=1,alpha=1){
@@ -2593,7 +2704,7 @@
 
   function showSpeech(p,pt){
     if(!p){hideSpeech();return;}
-    $('speechWho').textContent=`${p.kingdom} · ${p.job}`;
+    $('speechWho').textContent=`${p.kingdom} · ${p.job} · Lv.${normalizeLevel(p.level||1)}`;
     $('speechTrait').textContent=p.trait;
     $('speechLine').textContent=`“${p.quote}”`;
     const frame=$('canvasFrame').getBoundingClientRect();
