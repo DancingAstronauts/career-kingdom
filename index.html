@@ -221,6 +221,8 @@
     .seal .nm{display:block;font-size:8px;font-weight:1000;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .goal-next{margin-top:9px;font-size:10px;line-height:1.45;color:#665e50;font-weight:800}
 
+    .daily-event-hud{position:absolute;left:12px;top:12px;z-index:8;max-width:min(300px,60%);padding:8px 10px;background:rgba(20,42,48,.92);border:2px solid #d8e6ce;color:#fff6d5;box-shadow:3px 3px 0 rgba(0,0,0,.25);pointer-events:none;font-size:11px;font-weight:800;line-height:1.4}
+    .daily-event-title{font-size:12px;font-weight:1000}.daily-event-detail{opacity:.9;margin-top:3px;font-size:10px}
     .resource-hud{
       position:absolute;right:14px;top:14px;z-index:18;
       max-width:min(280px,62%);
@@ -279,7 +281,9 @@
       .resident-list{grid-template-columns:repeat(2,minmax(0,1fr))}
       .resident-list.world-list{max-height:360px}
       .ranking-podium{gap:4px}
-      .resource-hud{right:9px;top:9px;max-width:72%;font-size:9px}
+      .daily-event-hud{position:absolute;left:12px;top:12px;z-index:8;max-width:min(300px,60%);padding:8px 10px;background:rgba(20,42,48,.92);border:2px solid #d8e6ce;color:#fff6d5;box-shadow:3px 3px 0 rgba(0,0,0,.25);pointer-events:none;font-size:11px;font-weight:800;line-height:1.4}
+    .daily-event-title{font-size:12px;font-weight:1000}.daily-event-detail{opacity:.9;margin-top:3px;font-size:10px}
+    .resource-hud{right:9px;top:9px;max-width:72%;font-size:9px}
       select{min-width:135px;max-width:58vw}
     }
   </style>
@@ -325,6 +329,7 @@
           <div class="line" id="speechLine"></div>
         </div>
         <div class="resource-hud" id="resourceHud"><div class="resource-big">🎁 왕국 자원</div><div class="resource-small">3시간마다 자원이 나타납니다.</div></div>
+        <div class="daily-event-hud" id="dailyEventHud"><div class="daily-event-title">🌊 바다의 랜덤 이벤트</div><div class="daily-event-detail">매일 15:00 다음 이벤트 예고</div></div>
         <div class="map-legend">월드맵을 살펴보고 주민들의 목소리도 들어보세요! 떠 있는 자원도 눌러보세요.</div>
       </div>
     </section>
@@ -371,8 +376,20 @@
   const WORK_SHEET_NAME = '왕국 작업';
   const INTRO_SHEET_NAME = '왕국 소개';
   // 여러 방문자가 자원/레벨업/스탯을 공유하려면 Apps Script 웹 앱 URL을 여기에 입력하세요.
-  const SHARED_API_URL = 'https://script.google.com/macros/s/AKfycbwefQsHwIeWEEqJC3E2Loea_JJtPaKASOyjgfKJ7RBu8pT8g_OombN4Z0GWhuXqdQ/exec';
+  const SHARED_API_URL = 'https://script.google.com/macros/s/AKfycbz8Wi38bLtE8zrI_BaK2jCe0d2rofxA43X7ta6vpdkn7Wx9usTfFkbeXTCCkSFhGIZk/exec';
   const WORLD_OPTION = '__WORLD__';
+  const EVENT_DEFINITIONS = [
+    {id:'pirates',title:'대해적 시대',icon:'🏴‍☠️',object:'해적선',desc:'해적선을 눌러 보물을 획득하세요.'},
+    {id:'iceage',title:'빙하기',icon:'🐻‍❄️',object:'북극곰',desc:'빙산 위의 북극곰을 눌러주세요.'},
+    {id:'mermaid',title:'인어공주의 등장',icon:'🧜‍♀️',object:'인어공주',desc:'바다에 나타난 인어공주를 만나보세요.'},
+    {id:'tuna',title:'참치떼 등장',icon:'🐟',object:'참치떼',desc:'지나가는 참치떼를 클릭하세요.'},
+    {id:'ghostship',title:'유령선 등장',icon:'👻',object:'유령선',desc:'안개 속 유령선을 조사하세요.'},
+    {id:'starfall',title:'바다에 떨어진 별',icon:'🌟',object:'별 조각',desc:'바다에 떨어진 별 조각을 획득하세요.'},
+    {id:'whale',title:'고래의 귀환',icon:'🐋',object:'고래',desc:'돌아온 고래를 눌러 선물을 받으세요.'},
+    {id:'island',title:'지도에 없는 섬',icon:'🏝️',object:'미지의 섬',desc:'새로 나타난 섬을 탐험하세요.'},
+    {id:'worldwar',title:'세계대전',icon:'🚢',object:'보급선',desc:'바다의 보급선을 눌러 왕국을 지원하세요.'},
+    {id:'pandemic',title:'전염병',icon:'💉',object:'백신',desc:'바다에 나타난 백신을 눌러 왕국을 지켜주세요.'}
+  ];
 
   const JOBS = [
     '교사','건축가','유튜버','제빵사','수의사','소방관',
@@ -579,6 +596,10 @@
   let worldEvents = [];
   let resourceProgress = loadResourceProgress();
   let resourceTimer = 0;
+  let dailyEventState = null;
+  let eventSyncInFlight = false;
+  let lastEventSyncAt = 0;
+  let eventClaimCounts = {};
   let residents = [];
   let buildings = [];
   let hovered = null;
@@ -639,6 +660,72 @@
       document.head.appendChild(script);
       timer=setTimeout(()=>{cleanup();reject(new Error('공용 저장소 응답 시간이 초과되었습니다.'));},12000);
     });
+  }
+
+  function eventClockText(ms){
+    const sec=Math.max(0,Math.ceil(ms/1000));
+    const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;
+    return [h,m,s].map(n=>String(n).padStart(2,'0')).join(':');
+  }
+  async function syncDailyEvent(force=false){
+    if(!SHARED_API_ENABLED||eventSyncInFlight)return;
+    if(!force&&Date.now()-lastEventSyncAt<30000)return;
+    eventSyncInFlight=true;
+    try{
+      const result=await callSharedApi({action:'eventStatus',name:activeStudent===WORLD_OPTION?'':activeStudent});
+      dailyEventState=result.event||null;
+      eventClaimCounts=result.claims||{};
+      lastEventSyncAt=Date.now();
+      updateDailyEventHud();
+    }catch(err){console.error('랜덤 이벤트 동기화 실패:',err);}
+    finally{eventSyncInFlight=false;}
+  }
+  function updateDailyEventHud(){
+    const hud=$('dailyEventHud'); if(!hud)return;
+    const now=Date.now();
+    if(!dailyEventState){hud.innerHTML='<div class="daily-event-title">🌊 바다의 랜덤 이벤트</div><div class="daily-event-detail">공용 이벤트 정보를 불러오는 중입니다.</div>';return;}
+    const ev=dailyEventState;
+    let title='🌊 바다의 랜덤 이벤트',detail='매일 15:00 다음 이벤트 예고';
+    if(ev.phase==='beforePreview') detail=`다음 이벤트 예고까지 ${eventClockText(ev.previewAt-now)}`;
+    else if(ev.phase==='preview') {title=`${ev.icon} 다음 이벤트: ${ev.title}`;detail=`등장까지 ${eventClockText(ev.startAt-now)} · 매일 16:30 시작`;}
+    else if(ev.phase==='active'){
+      title=`${ev.icon} ${ev.title} 진행 중!`;
+      const count=activeStudent!==WORLD_OPTION?(Number(eventClaimCounts[activeStudent])||0):0;
+      detail=activeStudent===WORLD_OPTION?'왕국을 선택하고 바다의 이벤트 오브젝트를 눌러보세요.':`${ev.desc} · 이 왕국 보상 ${count}/3 · 종료까지 ${eventClockText(ev.endAt-now)}`;
+    }else detail='오늘의 이벤트가 종료되었습니다. 내일 다시 만나요!';
+    hud.innerHTML=`<div class="daily-event-title">${escapeHtml(title)}</div><div class="daily-event-detail">${escapeHtml(detail)}</div>`;
+  }
+  function dailyEventScreenPoint(){return {x:Math.max(65,WORLD_W-78),y:Math.max(75,WORLD_H-82)};}
+  function drawDailyEvent(now){
+    if(!dailyEventState||dailyEventState.phase!=='active')return;
+    const p=dailyEventScreenPoint();
+    const pulse=1+Math.sin(now/210)*.08;
+    ctx.save();ctx.translate(p.x,p.y);ctx.scale(pulse,pulse);ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillStyle='rgba(12,42,55,.22)';ctx.beginPath();ctx.ellipse(3,31,38,10,0,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#c5e7e4';ctx.strokeStyle='#183d49';ctx.lineWidth=3;ctx.beginPath();ctx.ellipse(0,13,36,17,0,0,Math.PI*2);ctx.fill();ctx.stroke();
+    ctx.fillStyle='#6caaa9';ctx.beginPath();ctx.ellipse(-2,13,25,10,0,0,Math.PI*2);ctx.fill();
+    ctx.font='30px "Segoe UI Emoji","Apple Color Emoji",sans-serif';ctx.fillText(dailyEventState.icon,0,3);
+    ctx.fillStyle='#fff7d8';ctx.strokeStyle='#20352d';ctx.lineWidth=2;ctx.beginPath();ctx.roundRect(-48,-36,96,17,4);ctx.fill();ctx.stroke();
+    ctx.fillStyle='#26392e';ctx.font='900 9px Pretendard,sans-serif';ctx.fillText(dailyEventState.object,0,-27);
+    ctx.restore();
+  }
+  function findDailyEvent(pt,touch=false){
+    if(!dailyEventState||dailyEventState.phase!=='active')return false;
+    const p=dailyEventScreenPoint();
+    return Math.hypot(pt.sx-p.x,pt.sy-p.y)<(touch?48:39);
+  }
+  async function collectDailyEvent(){
+    if(activeStudent===WORLD_OPTION){showToast('먼저 보상을 받을 왕국을 선택해주세요.');return;}
+    if(!dailyEventState||dailyEventState.phase!=='active'){showToast('지금은 랜덤 이벤트가 진행 중이 아닙니다.');return;}
+    try{
+      const result=await callSharedApi({action:'eventCollect',name:activeStudent,eventId:dailyEventState.id});
+      if(result.entry){resourceProgress[activeStudent]=result.entry;saveResourceProgress();}
+      if(result.claims)eventClaimCounts=result.claims;
+      if(!result.collected){showToast(result.message||'이 왕국은 이벤트 보상을 3회 획득했습니다.');await syncDailyEvent(true);return;}
+      const info=resourceStatInfo(result.statKey);
+      showToast(`${kingdomDisplayName(activeStudent)} 이벤트 보상! ${info.icon} ${info.label} +1`);
+      await syncSharedResources(true);await syncDailyEvent(true);rebuildWorld();renderSelection();updateResourceHud();
+    }catch(err){console.error('이벤트 보상 획득 실패:',err);showToast('이벤트 보상을 받지 못했습니다. 공용 저장소 연결을 확인해주세요.');}
   }
 
   function sharedResidentPayload(name){
@@ -1894,6 +1981,7 @@
     residents.forEach(drawResident);
     ctx.restore();
     drawResourceDrops(now);
+    drawDailyEvent(now);
 
     raf=requestAnimationFrame(drawWorld);
   }
@@ -2796,6 +2884,7 @@
 
   function handleCanvasTap(clientX,clientY,preferredResident=null,isTouch=false){
     const pt=clientCanvasPoint(clientX,clientY);
+    if(findDailyEvent(pt,isTouch)){pinned=null;hideSpeech();collectDailyEvent();return;}
     const resourceKingdom=findResourceDrop(pt,isTouch);
     if(resourceKingdom){
       pinned=null;
@@ -3050,6 +3139,8 @@
     if(activeStudent===WORLD_OPTION) fitWorld(); else focusSelectedKingdom();
   });
   $('reloadBtn').addEventListener('click',()=>{showToast('시트를 다시 불러옵니다.');loadGoogleSheet();});
+  setInterval(()=>{syncDailyEvent(false);updateDailyEventHud();},1000);
+  syncDailyEvent(true);
   $('fitWorldBtn').addEventListener('click',()=>{activeStudent=WORLD_OPTION;$('studentSelect').value=WORLD_OPTION;renderSelection();fitWorld();});
   $('focusBtn').addEventListener('click',()=>{if(activeStudent===WORLD_OPTION) showToast('먼저 학생 왕국을 선택해주세요.'); else focusSelectedKingdom();});
   $('zoomOutBtn').addEventListener('click',()=>changeZoom(.82));
