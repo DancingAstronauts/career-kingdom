@@ -370,6 +370,8 @@
   const SHEET_ID = '1q2TaaMpyR5S0vjWHUYAEhRtQTsa_d0neWRpNO_bYS38';
   const WORK_SHEET_NAME = '왕국 작업';
   const INTRO_SHEET_NAME = '왕국 소개';
+  // 여러 방문자가 자원/레벨업/스탯을 공유하려면 Apps Script 웹 앱 URL을 여기에 입력하세요.
+  const SHARED_API_URL = 'https://script.google.com/macros/s/AKfycbwefQsHwIeWEEqJC3E2Loea_JJtPaKASOyjgfKJ7RBu8pT8g_OombN4Z0GWhuXqdQ/exec';
   const WORLD_OPTION = '__WORLD__';
 
   const JOBS = [
@@ -466,6 +468,9 @@
   // 3시간마다 왕국에 1개의 자원이 생성된다. 미수령 자원은 누적되지 않는다.
   const RESOURCE_INTERVAL_MS = 3 * 60 * 60 * 1000;
   const RESOURCE_STORAGE_KEY = `careerKingdom.resourceProgress.v1.${SHEET_ID}`;
+  const SHARED_API_ENABLED = /^https:\/\/script\.google\.com\/macros\/s\//.test(SHARED_API_URL);
+  let lastSharedSyncAt = 0;
+  let sharedSyncInFlight = false;
   const JOB_RESOURCE_AFFINITY = {
     '교사':['civic','happiness'],
     '건축가':['territory','safety'],
@@ -620,6 +625,52 @@
     return Object.fromEntries(STAT_INFO.map(info=>[info.key,0]));
   }
 
+  function callSharedApi(params){
+    return new Promise((resolve,reject)=>{
+      if(!SHARED_API_ENABLED){reject(new Error('공용 저장소 API 주소가 설정되지 않았습니다.'));return;}
+      const cb='kingdomSharedCb_'+Date.now()+'_'+Math.floor(Math.random()*1000000);
+      const script=document.createElement('script');
+      let timer=0;
+      const cleanup=()=>{clearTimeout(timer);delete window[cb];script.remove();};
+      window[cb]=(data)=>{cleanup();if(data&&data.ok)resolve(data);else reject(new Error(data&&data.error?data.error:'공용 저장소 응답 오류'));};
+      script.onerror=()=>{cleanup();reject(new Error('공용 저장소에 연결하지 못했습니다.'));};
+      const query=new URLSearchParams({...params,callback:cb,ts:String(Date.now())});
+      script.src=SHARED_API_URL+'?'+query.toString();
+      document.head.appendChild(script);
+      timer=setTimeout(()=>{cleanup();reject(new Error('공용 저장소 응답 시간이 초과되었습니다.'));},12000);
+    });
+  }
+
+  function sharedResidentPayload(name){
+    const student=students[name];
+    if(!student)return [];
+    const out=[];
+    Object.values(student.jobs||{}).forEach(row=>out.push({key:residentUpgradeKey(row),job:row.직업,level:normalizeLevel(row.레벨)}));
+    (student.customResidents||[]).forEach(row=>out.push({key:residentUpgradeKey(row),job:row.직업,level:normalizeLevel(row.레벨)}));
+    return out;
+  }
+
+  async function syncSharedResources(force=false){
+    if(!SHARED_API_ENABLED||sharedSyncInFlight||!students||!Object.keys(students).length)return;
+    if(!force&&Date.now()-lastSharedSyncAt<15000)return;
+    sharedSyncInFlight=true;
+    try{
+      const names=Object.keys(students);
+      const result=await callSharedApi({action:'sync',names:JSON.stringify(names)});
+      const next=result.data&&typeof result.data==='object'?result.data:{};
+      const before=JSON.stringify(resourceProgress);
+      resourceProgress=next;
+      names.forEach(name=>ensureResourceEntry(name));
+      saveResourceProgress();
+      lastSharedSyncAt=Date.now();
+      if(before!==JSON.stringify(resourceProgress)){rebuildWorld();renderSelection();}
+      updateResourceHud();
+    }catch(err){
+      console.error('공용 왕국 데이터 동기화 실패:',err);
+      if(!window.__sharedApiWarned){showToast('공용 저장소 연결에 실패했습니다. 관리자에게 확인을 요청해주세요.');window.__sharedApiWarned=true;}
+    }finally{sharedSyncInFlight=false;}
+  }
+
   function loadResourceProgress(){
     try{
       const raw=localStorage.getItem(RESOURCE_STORAGE_KEY);
@@ -714,7 +765,9 @@
   }
 
   function refreshResourceAvailability(){
-    if(!students || !Object.keys(students).length){
+    if(!students || !Object.keys(students).length){updateResourceHud();return false;}
+    if(SHARED_API_ENABLED){
+      syncSharedResources(false);
       updateResourceHud();
       return false;
     }
@@ -727,7 +780,7 @@
         changed=true;
       }
     });
-    if(changed) saveResourceProgress();
+    if(changed)saveResourceProgress();
     updateResourceHud();
     return changed;
   }
@@ -744,7 +797,35 @@
     return STAT_INFO.find(info=>info.key===key) || STAT_INFO[0];
   }
 
-  function collectResourceFor(name){
+  async function collectResourceFor(name){
+    if(SHARED_API_ENABLED){
+      try{
+        const result=await callSharedApi({action:'collect',name, residents:JSON.stringify(sharedResidentPayload(name))});
+        if(result.entry){resourceProgress[name]=result.entry;saveResourceProgress();}
+        lastSharedSyncAt=0;
+        if(!result.collected){
+          await syncSharedResources(true);
+          const entry=ensureResourceEntry(name);
+          const remain=Math.max(0,Number(entry.nextAt||0)-Date.now());
+          showToast(result.message||`${name}의 다음 자원까지 ${formatRemaining(remain)}`);
+          return false;
+        }
+        const drop=result.drop||{};
+        const info=resourceStatInfo(drop.statKey);
+        const amount=Math.max(1,Math.round(Number(drop.amount)||1));
+        const levelUp=result.levelUp;
+        const synergy=drop.boostedBy?` · ${drop.boostedBy} 시너지!`:'';
+        const levelMessage=levelUp&&levelUp.job?` ✨ ${levelUp.job} 레벨 업! Lv.${levelUp.from} → Lv.${levelUp.to}`:levelUp&&levelUp.maxed?' · 모든 주민이 최고 레벨입니다.':'';
+        showToast(`${kingdomDisplayName(name)} 자원 획득! ${info.icon} ${info.label} +${amount}${synergy}${levelMessage}`);
+        await syncSharedResources(true);
+        rebuildWorld();renderSelection();updateResourceHud();
+        return true;
+      }catch(err){
+        console.error('공용 자원 획득 실패:',err);
+        showToast('공용 저장소 연결에 실패해 자원을 획득하지 못했습니다.');
+        return false;
+      }
+    }
     const entry=ensureResourceEntry(name);
     if(!entry.pending){
       const remain=Math.max(0,Number(entry.nextAt||0)-Date.now());
@@ -760,15 +841,10 @@
     entry.pending=null;
     entry.nextAt=Date.now()+RESOURCE_INTERVAL_MS;
     saveResourceProgress();
-
     const synergy=drop.boostedBy ? ` · ${drop.boostedBy} 시너지!` : '';
-    const levelMessage=levelUp && levelUp.job
-      ? ` ✨ ${levelUp.job} 레벨 업! Lv.${levelUp.from} → Lv.${levelUp.to}`
-      : levelUp && levelUp.maxed ? ' · 모든 주민이 최고 레벨입니다.' : '';
+    const levelMessage=levelUp&&levelUp.job?` ✨ ${levelUp.job} 레벨 업! Lv.${levelUp.from} → Lv.${levelUp.to}`:levelUp&&levelUp.maxed?' · 모든 주민이 최고 레벨입니다.':'';
     showToast(`${kingdomDisplayName(name)} 자원 획득! ${info.icon} ${info.label} +${amount}${synergy}${levelMessage}`);
-    rebuildWorld();
-    renderSelection();
-    updateResourceHud();
+    rebuildWorld();renderSelection();updateResourceHud();
     return true;
   }
 
@@ -2982,7 +3058,7 @@
   setCanvasCursor();
   resourceTimer=window.setInterval(()=>refreshResourceAvailability(),1000);
   window.addEventListener('storage',ev=>{
-    if(ev.key!==RESOURCE_STORAGE_KEY) return;
+    if(ev.key!==RESOURCE_STORAGE_KEY || SHARED_API_ENABLED) return;
     resourceProgress=loadResourceProgress();
     refreshResourceAvailability();
     if(Object.keys(students).length){rebuildWorld();renderSelection();}
