@@ -33,7 +33,7 @@
       background-size:11px 11px,auto;
     }
 
-    button,select{font:inherit}
+    button,select,input{font:inherit}
     button{cursor:pointer}
 
     .app{
@@ -67,7 +67,7 @@
 
     .student-tools{grid-area:tools;display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap;align-self:start;min-width:340px}
     .student-tools label{font-size:12px;font-weight:900;color:var(--ink-soft)}
-    select,.btn{
+    select,.btn,.student-search{
       height:42px;
       border:2px solid var(--ink);
       background:#fffaf0;
@@ -78,6 +78,18 @@
       box-shadow:3px 3px 0 rgba(34,37,29,.28);
     }
     select{min-width:160px}
+    .student-search{
+      display:block;
+      flex:0 1 210px;
+      width:210px;
+      min-width:175px;
+      max-width: min(210px, 48vw);
+      outline:none;
+      appearance:none;
+      -webkit-appearance:none;
+    }
+    .student-search::placeholder{color:#8b8068;font-weight:700;opacity:1}
+    .student-search:focus{background:#fffdf6;border-color:var(--green-dark);box-shadow:3px 3px 0 rgba(34,37,29,.28),inset 0 0 0 1px var(--green-dark)}
     .mini-btn{width:42px;padding:0;text-align:center;font-size:18px}
     .btn:hover{transform:translate(-1px,-1px);box-shadow:4px 4px 0 rgba(34,37,29,.3)}
     .btn:active{transform:translate(2px,2px);box-shadow:1px 1px 0 rgba(34,37,29,.3)}
@@ -301,7 +313,7 @@
 
     <div class="student-tools">
       <label for="studentSearch">보기</label>
-      <input id="studentSearch" type="search" list="studentSearchOptions" placeholder="이름 입력해 왕국 찾기" aria-label="이름으로 왕국 검색" autocomplete="off">
+      <input id="studentSearch" class="student-search" type="text" list="studentSearchOptions" placeholder="이름 검색…" aria-label="이름으로 왕국 검색" autocomplete="off">
       <datalist id="studentSearchOptions"></datalist>
       <select id="studentSelect" aria-label="왕국 선택" style="display:none"></select>
       <button type="button" class="btn" id="fitWorldBtn">전체 보기</button>
