@@ -300,8 +300,10 @@
     <div class="stats" id="stats"></div>
 
     <div class="student-tools">
-      <label for="studentSelect">보기</label>
-      <select id="studentSelect" aria-label="왕국 선택"></select>
+      <label for="studentSearch">보기</label>
+      <input id="studentSearch" type="search" list="studentSearchOptions" placeholder="이름 입력해 왕국 찾기" aria-label="이름으로 왕국 검색" autocomplete="off">
+      <datalist id="studentSearchOptions"></datalist>
+      <select id="studentSelect" aria-label="왕국 선택" style="display:none"></select>
       <button type="button" class="btn" id="fitWorldBtn">전체 보기</button>
       <button type="button" class="btn" id="focusBtn">선택 왕국</button>
       <button type="button" class="btn mini-btn" id="zoomOutBtn" aria-label="축소">−</button>
@@ -1594,21 +1596,30 @@
     const names=Object.keys(students).sort((a,b)=>a.localeCompare(b,'ko'));
     const prev=activeStudent;
     select.innerHTML='';
+    const searchOptions=$('studentSearchOptions');
+    searchOptions.innerHTML='';
     const all=document.createElement('option');
     all.value=WORLD_OPTION;
     all.textContent=`🌍 전체 세계 (${names.length}개 왕국)`;
     select.appendChild(all);
+    const allSearch=document.createElement('option');
+    allSearch.value=`🌍 전체 세계 (${names.length}개 왕국)`;
+    searchOptions.appendChild(allSearch);
     names.forEach(name=>{
       const op=document.createElement('option');
       op.value=name;
       op.textContent=name+(isDemo?' (데모)':'');
       select.appendChild(op);
+      const searchOp=document.createElement('option');
+      searchOp.value=name;
+      searchOptions.appendChild(searchOp);
     });
     const queryName=new URLSearchParams(location.search).get('student');
     if(prev!==WORLD_OPTION && names.includes(prev)) activeStudent=prev;
     else if(queryName && names.includes(queryName)) activeStudent=queryName;
     else activeStudent=WORLD_OPTION;
     select.value=activeStudent;
+    $('studentSearch').value=activeStudent===WORLD_OPTION ? `🌍 전체 세계 (${names.length}개 왕국)` : activeStudent;
     renderSelection();
   }
 
@@ -2080,6 +2091,7 @@
     if(!students[name]) return;
     activeStudent=name;
     $('studentSelect').value=name;
+    $('studentSearch').value=name;
     renderSelection();
     if(focus) focusSelectedKingdom();
   }
@@ -3333,15 +3345,40 @@
     setCanvasCursor();
   });
 
+  function applyStudentSearch(){
+    const typed=$('studentSearch').value.trim();
+    const select=$('studentSelect');
+    const exact=[...select.options].find(op=>op.value===typed || op.textContent===typed);
+    if(!exact){
+      const matched=Object.keys(students).find(name=>name.toLocaleLowerCase('ko').includes(typed.toLocaleLowerCase('ko')));
+      if(typed && matched){
+        $('studentSearch').value=matched;
+        select.value=matched;
+        activeStudent=matched;
+      }else return;
+    }else{
+      activeStudent=exact.value;
+      select.value=exact.value;
+      $('studentSearch').value=exact.value===WORLD_OPTION ? exact.textContent : exact.value;
+    }
+    renderSelection();
+    if(activeStudent===WORLD_OPTION) fitWorld(); else focusSelectedKingdom();
+  }
+  $('studentSearch').addEventListener('change',applyStudentSearch);
+  $('studentSearch').addEventListener('keydown',e=>{
+    if(e.key==='Enter'){e.preventDefault();applyStudentSearch();}
+    if(e.key==='Escape'){$('studentSearch').value=activeStudent===WORLD_OPTION ? $('studentSelect').options[0]?.textContent || '' : activeStudent;}
+  });
   $('studentSelect').addEventListener('change',e=>{
     activeStudent=e.target.value;
+    $('studentSearch').value=activeStudent===WORLD_OPTION ? e.target.options[0]?.textContent || '' : activeStudent;
     renderSelection();
     if(activeStudent===WORLD_OPTION) fitWorld(); else focusSelectedKingdom();
   });
   $('reloadBtn').addEventListener('click',()=>{showToast('시트를 다시 불러옵니다.');loadGoogleSheet();});
   setInterval(()=>{syncDailyEvent(false);updateDailyEventHud();},1000);
   syncDailyEvent(true);
-  $('fitWorldBtn').addEventListener('click',()=>{activeStudent=WORLD_OPTION;$('studentSelect').value=WORLD_OPTION;renderSelection();fitWorld();});
+  $('fitWorldBtn').addEventListener('click',()=>{activeStudent=WORLD_OPTION;$('studentSelect').value=WORLD_OPTION;$('studentSearch').value=$('studentSelect').options[0]?.textContent || '';renderSelection();fitWorld();});
   $('focusBtn').addEventListener('click',()=>{if(activeStudent===WORLD_OPTION) showToast('먼저 학생 왕국을 선택해주세요.'); else focusSelectedKingdom();});
   $('zoomOutBtn').addEventListener('click',()=>changeZoom(.82));
   $('zoomInBtn').addEventListener('click',()=>changeZoom(1.22));
