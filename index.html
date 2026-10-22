@@ -376,7 +376,7 @@
   const WORK_SHEET_NAME = '왕국 작업';
   const INTRO_SHEET_NAME = '왕국 소개';
   // 여러 방문자가 자원/레벨업/스탯을 공유하려면 Apps Script 웹 앱 URL을 여기에 입력하세요.
-  const SHARED_API_URL = 'https://script.google.com/macros/s/AKfycbwmVj-vqMutg71370CC7Ja_6dQ1UI2WhxyGHpfRRCN1FKS4rtq9O1s2JYay3A9XDVU/exec';
+  const SHARED_API_URL = 'https://script.google.com/macros/s/AKfycbz5DtUNKTPFjJx5bU9MveoS470G8iCo7znnYqinBGAkb1tQ0aLCQuFxborM4PDJWmnI/exec';
   const WORLD_OPTION = '__WORLD__';
   const EVENT_DEFINITIONS = [
     {id:'pirates',title:'대해적 시대',icon:'🏴‍☠️',object:'해적선',desc:'해적선을 눌러 보물을 획득하세요.'},
@@ -599,6 +599,9 @@
   let dailyEventState = null;
   let eventSyncInFlight = false;
   let lastEventSyncAt = 0;
+  // 이벤트 시간은 Apps Script 서버 시각에 맞춰 기기 시계 오차를 보정합니다.
+  let serverTimeOffsetMs = 0;
+  function eventNow(){ return Date.now() + serverTimeOffsetMs; }
   let eventClaimCounts = {};
   let dailyEventObjects = [];
   let dailyEventObjectKey = '';
@@ -626,19 +629,21 @@
   const canvas = $('world');
   // 모바일 GPU 부담을 낮추고 픽셀 아트 특성에 맞게 backing resolution 제한
   const IS_SMALL_SCREEN = window.matchMedia('(max-width: 700px)').matches;
+  const IS_LOW_POWER = IS_SMALL_SCREEN || (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4);
   const DEVICE_DPR = window.devicePixelRatio || 1;
-  const RENDER_SCALE = IS_SMALL_SCREEN ? 1 : Math.min(1.5, Math.max(1, DEVICE_DPR));
+  // 저사양 휴대폰은 내부 렌더링 해상도를 크게 낮춰 GPU/메모리 사용량을 억제합니다.
+  const RENDER_SCALE = IS_SMALL_SCREEN ? 0.62 : (IS_LOW_POWER ? 0.8 : Math.min(1.25, Math.max(1, DEVICE_DPR)));
   const ctx = canvas.getContext('2d', { alpha: false });
   canvas.width = Math.round(WORLD_W * RENDER_SCALE);
   canvas.height = Math.round(WORLD_H * RENDER_SCALE);
   ctx.imageSmoothingEnabled = false;
-  // 모바일은 초당 24프레임, 데스크톱은 30프레임으로 제한
-  const TARGET_FRAME_MS = IS_SMALL_SCREEN ? 1000 / 24 : 1000 / 30;
+  // 저사양 기기는 프레임 제한을 더 낮춰 발열과 끊김을 줄입니다.
+  const TARGET_FRAME_MS = IS_SMALL_SCREEN ? 1000 / 12 : (IS_LOW_POWER ? 1000 / 18 : 1000 / 24);
   let lastDrawAt = 0;
   // 정적인 바다 배경은 한 번만 그려 캐시하고 매 프레임 재사용
   const waterCanvas = document.createElement('canvas');
-  waterCanvas.width = WORLD_W;
-  waterCanvas.height = WORLD_H;
+  waterCanvas.width = Math.max(1, Math.round(WORLD_W * (IS_LOW_POWER ? 0.7 : 1)));
+  waterCanvas.height = Math.max(1, Math.round(WORLD_H * (IS_LOW_POWER ? 0.7 : 1)));
   const waterCtx = waterCanvas.getContext('2d', { alpha: false });
   let waterTextureReady = false;
 
@@ -686,18 +691,20 @@
     if(!SHARED_API_ENABLED||eventSyncInFlight)return;
     if(!force&&Date.now()-lastEventSyncAt<30000)return;
     eventSyncInFlight=true;
+    // 실패해도 매초 재요청하지 않도록 요청 시작 시각을 기록합니다.
+    lastEventSyncAt=Date.now();
     try{
       const result=await callSharedApi({action:'eventStatus',name:activeStudent===WORLD_OPTION?'':activeStudent});
+      if(Number.isFinite(Number(result.serverNow))) serverTimeOffsetMs=Number(result.serverNow)-Date.now();
       dailyEventState=result.event||null;
       eventClaimCounts=result.claims||{};
-      lastEventSyncAt=Date.now();
       updateDailyEventHud();
     }catch(err){console.error('랜덤 이벤트 동기화 실패:',err);}
     finally{eventSyncInFlight=false;}
   }
   function updateDailyEventHud(){
     const hud=$('dailyEventHud'); if(!hud)return;
-    const now=Date.now();
+    const now=eventNow();
     if(!dailyEventState){hud.innerHTML='<div class="daily-event-title">🌊 바다의 랜덤 이벤트</div><div class="daily-event-detail">공용 이벤트 정보를 불러오는 중입니다.</div>';return;}
     const ev=dailyEventState;
     let title='🌊 바다의 랜덤 이벤트',detail='매일 15:00 다음 이벤트 예고';
@@ -766,7 +773,7 @@
     for(const o of dailyEventObjects){
       if(locallyHiddenEventObjects.has(o.id))continue;
       if(dailyEventState.collectedObjects&&dailyEventState.collectedObjects.includes(o.id))continue;
-      const p=eventObjectPosition(o,now);const d=Math.hypot(pt.x-p.x,pt.y-p.y);
+      const p=eventObjectPosition(o,eventNow());const d=Math.hypot(pt.x-p.x,pt.y-p.y);
       if(d<threshold+o.size*.25&&d<bestD){best=o;bestD=d;}
     }
     return best;
@@ -2030,7 +2037,7 @@
     // requestAnimationFrame 자체는 브라우저 주기에 맞추되, 실제 전체 렌더링은 제한
     if(now-lastDrawAt<TARGET_FRAME_MS){raf=requestAnimationFrame(drawWorld);return;}
     lastDrawAt=now;
-    if(now-lastMove>400 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+    if(now-lastMove>(IS_LOW_POWER ? 800 : 500) && !window.matchMedia('(prefers-reduced-motion: reduce)').matches){
       moveResidents();
       lastMove=now;
     }
@@ -2047,6 +2054,7 @@
     drawInterKingdomDecor();
     buildings.forEach(drawBuilding);
     worldKingdoms.forEach(drawKingdomPopulation);
+    // 저사양 기기에서는 장식용 미세 애니메이션 대신 캐릭터 위치 갱신 간격을 늘립니다.
     residents.forEach(drawResident);
     drawDailyEvent(now);
     ctx.restore();
@@ -2169,17 +2177,18 @@
 
   function drawScreenWater(){
     if(!waterTextureReady){
+      const waterScale = waterCanvas.width / WORLD_W;
       waterCtx.fillStyle='#87a8a0';
-      waterCtx.fillRect(0,0,WORLD_W,WORLD_H);
+      waterCtx.fillRect(0,0,waterCanvas.width,waterCanvas.height);
       for(let y=4;y<WORLD_H;y+=14){
         for(let x=(Math.floor(y/14)%2)*8;x<WORLD_W;x+=31){
           waterCtx.fillStyle=randHash(x,y,2)>.55?'#789b94':'#9bb6ab';
-          waterCtx.fillRect(x,y,12,2);
+          waterCtx.fillRect(x*waterScale,y*waterScale,Math.max(1,12*waterScale),Math.max(1,2*waterScale));
         }
       }
       waterTextureReady=true;
     }
-    ctx.drawImage(waterCanvas,0,0);
+    ctx.drawImage(waterCanvas,0,0,WORLD_W,WORLD_H);
   }
 
   function kingdomCenter(k){ return {x:k.rect.x+k.rect.w/2,y:k.rect.y+k.rect.h/2}; }
@@ -3232,7 +3241,7 @@
     }
   });
   setCanvasCursor();
-  resourceTimer=window.setInterval(()=>refreshResourceAvailability(),1000);
+  resourceTimer=window.setInterval(()=>refreshResourceAvailability(),5000);
   window.addEventListener('storage',ev=>{
     if(ev.key!==RESOURCE_STORAGE_KEY || SHARED_API_ENABLED) return;
     resourceProgress=loadResourceProgress();
