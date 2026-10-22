@@ -376,7 +376,7 @@
   const WORK_SHEET_NAME = '왕국 작업';
   const INTRO_SHEET_NAME = '왕국 소개';
   // 여러 방문자가 자원/레벨업/스탯을 공유하려면 Apps Script 웹 앱 URL을 여기에 입력하세요.
-  const SHARED_API_URL = 'https://script.google.com/macros/s/AKfycbz8Wi38bLtE8zrI_BaK2jCe0d2rofxA43X7ta6vpdkn7Wx9usTfFkbeXTCCkSFhGIZk/exec';
+  const SHARED_API_URL = 'https://script.google.com/macros/s/AKfycbwefQsHwIeWEEqJC3E2Loea_JJtPaKASOyjgfKJ7RBu8pT8g_OombN4Z0GWhuXqdQ/exec';
   const WORLD_OPTION = '__WORLD__';
   const EVENT_DEFINITIONS = [
     {id:'pirates',title:'대해적 시대',icon:'🏴‍☠️',object:'해적선',desc:'해적선을 눌러 보물을 획득하세요.'},
@@ -621,11 +621,23 @@
 
   const $ = id => document.getElementById(id);
   const canvas = $('world');
-  const ctx = canvas.getContext('2d');
-  const RENDER_SCALE = Math.min(2.5, Math.max(1.5, window.devicePixelRatio || 1));
+  // 모바일 GPU 부담을 낮추고 픽셀 아트 특성에 맞게 backing resolution 제한
+  const IS_SMALL_SCREEN = window.matchMedia('(max-width: 700px)').matches;
+  const DEVICE_DPR = window.devicePixelRatio || 1;
+  const RENDER_SCALE = IS_SMALL_SCREEN ? 1 : Math.min(1.5, Math.max(1, DEVICE_DPR));
+  const ctx = canvas.getContext('2d', { alpha: false });
   canvas.width = Math.round(WORLD_W * RENDER_SCALE);
   canvas.height = Math.round(WORLD_H * RENDER_SCALE);
   ctx.imageSmoothingEnabled = false;
+  // 모바일은 초당 24프레임, 데스크톱은 30프레임으로 제한
+  const TARGET_FRAME_MS = IS_SMALL_SCREEN ? 1000 / 24 : 1000 / 30;
+  let lastDrawAt = 0;
+  // 정적인 바다 배경은 한 번만 그려 캐시하고 매 프레임 재사용
+  const waterCanvas = document.createElement('canvas');
+  waterCanvas.width = WORLD_W;
+  waterCanvas.height = WORLD_H;
+  const waterCtx = waterCanvas.getContext('2d', { alpha: false });
+  let waterTextureReady = false;
 
   function clamp(n,min=0,max=100){ return Math.max(min,Math.min(max,n)); }
   function norm(s){ return String(s ?? '').replace(/\s+/g,'').toLowerCase(); }
@@ -1643,7 +1655,8 @@
   }
 
   function rebuildWorld(){
-    cancelAnimationFrame(raf);
+    if(raf) cancelAnimationFrame(raf);
+    raf=0;
     residents=[];
     buildings=[];
     hovered=null;
@@ -1674,9 +1687,12 @@
     }
 
     worldKingdoms.forEach(k=>prepareKingdomObjects(k));
+    // 매 프레임 정렬하지 않고 왕국 재구성 시 한 번만 정렬
+    buildings.sort((a,b)=>a.y-b.y);
     worldEvents=computeWorldEvents(worldStates);
     lastMove=0;
-    drawWorld(performance.now());
+    lastDrawAt=0;
+    if(!document.hidden && !raf) raf=requestAnimationFrame(drawWorld);
   }
 
 
@@ -1961,7 +1977,11 @@
   }
 
   function drawWorld(now){
-    if(now-lastMove>250 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+    if(document.hidden){raf=0;return;}
+    // requestAnimationFrame 자체는 브라우저 주기에 맞추되, 실제 전체 렌더링은 제한
+    if(now-lastDrawAt<TARGET_FRAME_MS){raf=requestAnimationFrame(drawWorld);return;}
+    lastDrawAt=now;
+    if(now-lastMove>400 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches){
       moveResidents();
       lastMove=now;
     }
@@ -1976,7 +1996,7 @@
     drawContinentConnections();
     worldKingdoms.forEach(drawKingdomZone);
     drawInterKingdomDecor();
-    buildings.slice().sort((a,b)=>a.y-b.y).forEach(drawBuilding);
+    buildings.forEach(drawBuilding);
     worldKingdoms.forEach(drawKingdomPopulation);
     residents.forEach(drawResident);
     ctx.restore();
@@ -2099,14 +2119,18 @@
   }
 
   function drawScreenWater(){
-    ctx.fillStyle='#87a8a0';
-    ctx.fillRect(0,0,WORLD_W,WORLD_H);
-    for(let y=4;y<WORLD_H;y+=14){
-      for(let x=(Math.floor(y/14)%2)*8;x<WORLD_W;x+=31){
-        ctx.fillStyle=randHash(x,y,2)>.55?'#789b94':'#9bb6ab';
-        ctx.fillRect(x,y,12,2);
+    if(!waterTextureReady){
+      waterCtx.fillStyle='#87a8a0';
+      waterCtx.fillRect(0,0,WORLD_W,WORLD_H);
+      for(let y=4;y<WORLD_H;y+=14){
+        for(let x=(Math.floor(y/14)%2)*8;x<WORLD_W;x+=31){
+          waterCtx.fillStyle=randHash(x,y,2)>.55?'#789b94':'#9bb6ab';
+          waterCtx.fillRect(x,y,12,2);
+        }
       }
+      waterTextureReady=true;
     }
+    ctx.drawImage(waterCanvas,0,0);
   }
 
   function kingdomCenter(k){ return {x:k.rect.x+k.rect.w/2,y:k.rect.y+k.rect.h/2}; }
@@ -3146,6 +3170,17 @@
   $('zoomOutBtn').addEventListener('click',()=>changeZoom(.82));
   $('zoomInBtn').addEventListener('click',()=>changeZoom(1.22));
 
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden){
+      if(raf) cancelAnimationFrame(raf);
+      raf=0;
+    }else if(!raf){
+      lastDrawAt=0;
+      raf=requestAnimationFrame(drawWorld);
+      syncDailyEvent(true);
+      syncSharedResources(true);
+    }
+  });
   setCanvasCursor();
   resourceTimer=window.setInterval(()=>refreshResourceAvailability(),1000);
   window.addEventListener('storage',ev=>{
