@@ -376,7 +376,7 @@
   const WORK_SHEET_NAME = '왕국 작업';
   const INTRO_SHEET_NAME = '왕국 소개';
   // 여러 방문자가 자원/레벨업/스탯을 공유하려면 Apps Script 웹 앱 URL을 여기에 입력하세요.
-  const SHARED_API_URL = 'https://script.google.com/macros/s/AKfycbz5DtUNKTPFjJx5bU9MveoS470G8iCo7znnYqinBGAkb1tQ0aLCQuFxborM4PDJWmnI/exec';
+  const SHARED_API_URL = 'https://script.google.com/macros/s/AKfycbwefQsHwIeWEEqJC3E2Loea_JJtPaKASOyjgfKJ7RBu8pT8g_OombN4Z0GWhuXqdQ/exec';
   const WORLD_OPTION = '__WORLD__';
   const EVENT_DEFINITIONS = [
     {id:'pirates',title:'대해적 시대',icon:'🏴‍☠️',object:'해적선',desc:'해적선을 눌러 보물을 획득하세요.'},
@@ -487,6 +487,7 @@
   const RESOURCE_STORAGE_KEY = `careerKingdom.resourceProgress.v1.${SHEET_ID}`;
   const SHARED_API_ENABLED = /^https:\/\/script\.google\.com\/macros\/s\//.test(SHARED_API_URL);
   let lastSharedSyncAt = 0;
+  let lastSharedSyncAttemptAt = 0;
   let sharedSyncInFlight = false;
   const JOB_RESOURCE_AFFINITY = {
     '교사':['civic','happiness'],
@@ -596,13 +597,20 @@
   let worldEvents = [];
   let resourceProgress = loadResourceProgress();
   let resourceTimer = 0;
-  let dailyEventState = null;
+  const DAILY_EVENT_CACHE_KEY = 'careerKingdomDailyEventCacheV2';
+  function seoulDateClient(){ return new Date(Date.now()+9*60*60*1000).toISOString().slice(0,10); }
+  function readCachedDailyEvent(){
+    try{const v=JSON.parse(localStorage.getItem(DAILY_EVENT_CACHE_KEY)||'null');return v&&v.event&&v.event.date===seoulDateClient()?v:null;}catch(_){return null;}
+  }
+  const cachedDailyEvent=readCachedDailyEvent();
+  let dailyEventState = cachedDailyEvent?.event || null;
+  let eventClaimCounts = cachedDailyEvent?.claims || {};
   let eventSyncInFlight = false;
   let lastEventSyncAt = 0;
+  let eventSyncRetryDelayMs = 7000;
   // 이벤트 시간은 Apps Script 서버 시각에 맞춰 기기 시계 오차를 보정합니다.
   let serverTimeOffsetMs = 0;
   function eventNow(){ return Date.now() + serverTimeOffsetMs; }
-  let eventClaimCounts = {};
   let dailyEventObjects = [];
   let dailyEventObjectKey = '';
   let locallyHiddenEventObjects = new Set();
@@ -633,7 +641,7 @@
   const DEVICE_DPR = window.devicePixelRatio || 1;
   // 저사양 휴대폰은 내부 렌더링 해상도를 크게 낮춰 GPU/메모리 사용량을 억제합니다.
   const RENDER_SCALE = IS_SMALL_SCREEN ? 0.62 : (IS_LOW_POWER ? 0.8 : Math.min(1.25, Math.max(1, DEVICE_DPR)));
-  const ctx = canvas.getContext('2d', { alpha: false });
+  let ctx = canvas.getContext('2d', { alpha: false });
   canvas.width = Math.round(WORLD_W * RENDER_SCALE);
   canvas.height = Math.round(WORLD_H * RENDER_SCALE);
   ctx.imageSmoothingEnabled = false;
@@ -646,6 +654,12 @@
   waterCanvas.height = Math.max(1, Math.round(WORLD_H * (IS_LOW_POWER ? 0.7 : 1)));
   const waterCtx = waterCanvas.getContext('2d', { alpha: false });
   let waterTextureReady = false;
+  // 지형/건물/도로는 정적 레이어에 한 번 그려 두고 카메라나 왕국 데이터가 바뀔 때만 다시 렌더링합니다.
+  const staticLayerCanvas = document.createElement('canvas');
+  staticLayerCanvas.width = canvas.width;
+  staticLayerCanvas.height = canvas.height;
+  let staticLayerDirty = true;
+  let staticLayerKey = '';
 
   function clamp(n,min=0,max=100){ return Math.max(min,Math.min(max,n)); }
   function norm(s){ return String(s ?? '').replace(/\s+/g,'').toLowerCase(); }
@@ -678,7 +692,7 @@
       const query=new URLSearchParams({...params,callback:cb,ts:String(Date.now())});
       script.src=SHARED_API_URL+'?'+query.toString();
       document.head.appendChild(script);
-      timer=setTimeout(()=>{cleanup();reject(new Error('공용 저장소 응답 시간이 초과되었습니다.'));},12000);
+      timer=setTimeout(()=>{cleanup();reject(new Error('공용 저장소 응답 시간이 초과되었습니다.'));},20000);
     });
   }
 
@@ -689,31 +703,57 @@
   }
   async function syncDailyEvent(force=false){
     if(!SHARED_API_ENABLED||eventSyncInFlight)return;
-    if(!force&&Date.now()-lastEventSyncAt<30000)return;
+    if(!force&&Date.now()-lastEventSyncAt<eventSyncRetryDelayMs)return;
     eventSyncInFlight=true;
-    // 실패해도 매초 재요청하지 않도록 요청 시작 시각을 기록합니다.
-    lastEventSyncAt=Date.now();
+    const requestStartedAt=Date.now();
+    lastEventSyncAt=requestStartedAt;
     try{
       const result=await callSharedApi({action:'eventStatus',name:activeStudent===WORLD_OPTION?'':activeStudent});
-      if(Number.isFinite(Number(result.serverNow))) serverTimeOffsetMs=Number(result.serverNow)-Date.now();
+      const receivedAt=Date.now();
+      if(Number.isFinite(Number(result.serverNow))){
+        // 요청 왕복 시간의 중간값을 사용해 기기 시계 오차와 네트워크 지연을 함께 완화합니다.
+        serverTimeOffsetMs=Number(result.serverNow)-Math.round((requestStartedAt+receivedAt)/2);
+      }
       dailyEventState=result.event||null;
       eventClaimCounts=result.claims||{};
+      eventSyncRetryDelayMs=30000;
+      if(dailyEventState){
+        try{localStorage.setItem(DAILY_EVENT_CACHE_KEY,JSON.stringify({event:dailyEventState,claims:eventClaimCounts,savedAt:Date.now()}));}catch(_){}
+      }
       updateDailyEventHud();
-    }catch(err){console.error('랜덤 이벤트 동기화 실패:',err);}
-    finally{eventSyncInFlight=false;}
+    }catch(err){
+      eventSyncRetryDelayMs=7000;
+      console.error('랜덤 이벤트 동기화 실패:',err);
+      updateDailyEventHud();
+    }finally{eventSyncInFlight=false;}
   }
   function updateDailyEventHud(){
     const hud=$('dailyEventHud'); if(!hud)return;
     const now=eventNow();
-    if(!dailyEventState){hud.innerHTML='<div class="daily-event-title">🌊 바다의 랜덤 이벤트</div><div class="daily-event-detail">공용 이벤트 정보를 불러오는 중입니다.</div>';return;}
+    if(!dailyEventState){
+      const today=seoulDateClient();
+      const previewAt=new Date(today+'T15:00:00+09:00').getTime();
+      const startAt=new Date(today+'T16:30:00+09:00').getTime();
+      const endAt=new Date(today+'T17:30:00+09:00').getTime();
+      let detail='';
+      if(now<previewAt) detail=`이벤트 서버 연결 중 · 예고까지 ${eventClockText(previewAt-now)}`;
+      else if(now<startAt) detail=`이벤트 서버 연결 중 · 시작까지 ${eventClockText(startAt-now)}`;
+      else if(now<endAt) detail=`이벤트 서버 연결 중 · 재연결 시도 중`;
+      else detail=`오늘 이벤트 종료 · 내일 다시 만나요`;
+      hud.innerHTML=`<div class="daily-event-title">🌊 바다의 랜덤 이벤트</div><div class="daily-event-detail">${escapeHtml(detail)}</div>`;
+      return;
+    }
     const ev=dailyEventState;
+    // 서버에서 받은 시간표를 기준으로 매초 현재 단계를 다시 계산합니다.
+    const phase=now>=Number(ev.endAt)?'ended':now>=Number(ev.startAt)?'active':now>=Number(ev.previewAt)?'preview':'beforePreview';
+    ev.phase=phase;
     let title='🌊 바다의 랜덤 이벤트',detail='매일 15:00 다음 이벤트 예고';
-    if(ev.phase==='beforePreview') detail=`다음 이벤트 예고까지 ${eventClockText(ev.previewAt-now)}`;
-    else if(ev.phase==='preview') {title=`${ev.icon} 다음 이벤트: ${ev.title}`;detail=`등장까지 ${eventClockText(ev.startAt-now)} · 매일 16:30 시작`;}
-    else if(ev.phase==='active'){
-      title=`${ev.icon} ${ev.title} 진행 중!`;
+    if(phase==='beforePreview') detail=`다음 이벤트 예고까지 ${eventClockText(Number(ev.previewAt)-now)}`;
+    else if(phase==='preview') {title=`${ev.icon||'🌊'} 다음 이벤트: ${ev.title||'이벤트'}`;detail=`등장까지 ${eventClockText(Number(ev.startAt)-now)} · 매일 16:30 시작`}
+    else if(phase==='active'){
+      title=`${ev.icon||'🌊'} ${ev.title||'바다 이벤트'} 진행 중!`;
       const count=activeStudent!==WORLD_OPTION?(Number(eventClaimCounts[activeStudent])||0):0;
-      detail=activeStudent===WORLD_OPTION?'왕국을 선택하고 바다의 이벤트 오브젝트를 눌러보세요.':`${ev.desc} · 이 왕국 보상 ${count}/3 · 종료까지 ${eventClockText(ev.endAt-now)}`;
+      detail=activeStudent===WORLD_OPTION?'왕국을 선택하고 바다의 이벤트 오브젝트를 눌러보세요.':`${ev.desc||'바다의 오브젝트를 클릭해 보상을 받으세요.'} · 이 왕국 보상 ${count}/3 · 종료까지 ${eventClockText(Number(ev.endAt)-now)}`;
     }else detail='오늘의 이벤트가 종료되었습니다. 내일 다시 만나요!';
     hud.innerHTML=`<div class="daily-event-title">${escapeHtml(title)}</div><div class="daily-event-detail">${escapeHtml(detail)}</div>`;
   }
@@ -728,8 +768,8 @@
   }
   function eventObjectPosition(o,now){
     const t=now/1000+o.phase;
-    return {x:o.x+Math.sin(t*0.31)*o.driftX+Math.sin(t*0.13+o.phase)*3,
-            y:o.y+Math.cos(t*0.23+o.phase)*o.driftY+Math.sin(t*0.17)*2};
+    return {x:o.x+Math.sin(t*0.22+o.phase)*o.driftX+Math.sin(t*0.09+o.phase)*Math.min(4,o.driftX*.18),
+            y:o.y+Math.cos(t*0.18+o.phase)*o.driftY+Math.sin(t*0.11+o.phase)*Math.min(3,o.driftY*.18)};
   }
   function ensureDailyEventObjects(){
     if(!dailyEventState||dailyEventState.phase!=='active'||!worldKingdoms.length)return;
@@ -738,17 +778,63 @@
     dailyEventObjectKey=key;locallyHiddenEventObjects=new Set();dailyEventObjects=[];
     const rand=eventRandom(stringSeed(key));
     const icons=EVENT_OBJECT_ICONS[dailyEventState.id]||[dailyEventState.icon||'✨'];
-    const isLand=(x,y)=>worldKingdoms.some(k=>pointInPolygon(x,y,blobPoints(k,1)));
-    // 고정된 20개를 바다 빈 공간에 배치해, 새로고침해도 같은 오브젝트 구성이 유지됩니다.
-    for(let i=0;i<20;i++){
-      let x=0,y=0,found=false;
-      for(let tries=0;tries<500;tries++){
-        x=28+rand()*(WORLD_W-56);y=28+rand()*(WORLD_H-56);
-        if(!isLand(x,y)){found=true;break;}
-      }
-      if(!found){x=30+rand()*(WORLD_W-60);y=30+rand()*(WORLD_H-60);}
-      dailyEventObjects.push({id:`${key}:${i}`,x,y,icon:icons[Math.floor(rand()*icons.length)],phase:rand()*Math.PI*2,driftX:5+rand()*10,driftY:3+rand()*7,size:15+rand()*5});
+    // 현재 월드맵 전체 경계 안에서 영토와 충분히 떨어진 바다 좌표를 뽑습니다.
+    const bounds=worldBounds||{x:-WORLD_W/2,y:-WORLD_H/2,w:WORLD_W,h:WORLD_H};
+    const pad=8, landGap=10, minSpacing=Math.max(75,Math.min(150,Math.min(bounds.w,bounds.h)/7));
+    const candidates=[];
+    const isSea=(x,y)=>worldKingdoms.every(k=>{
+      const r=k.rect;
+      return !(x>=r.x-landGap&&x<=r.x+r.w+landGap&&y>=r.y-landGap&&y<=r.y+r.h+landGap);
+    });
+    // 후보 격자 + 무작위 표본을 섞어 한쪽 구석에 몰리는 것을 방지합니다.
+    const cols=24, rows=18;
+    for(let gy=0;gy<rows;gy++)for(let gx=0;gx<cols;gx++){
+      const x=bounds.x+pad+(gx+0.25+rand()*0.5)*Math.max(1,(bounds.w-2*pad)/cols);
+      const y=bounds.y+pad+(gy+0.25+rand()*0.5)*Math.max(1,(bounds.h-2*pad)/rows);
+      if(isSea(x,y))candidates.push({x,y,used:false});
     }
+    for(let i=0;i<1400;i++){
+      const x=bounds.x+pad+rand()*Math.max(1,bounds.w-2*pad);
+      const y=bounds.y+pad+rand()*Math.max(1,bounds.h-2*pad);
+      if(isSea(x,y))candidates.push({x,y,used:false});
+    }
+    const chosen=[];
+    while(chosen.length<20&&candidates.length){
+      let bestIndex=-1,bestScore=-Infinity;
+      // 최대 최소 거리 방식으로 고르면 이벤트가 바다 전체에 산발적으로 퍼집니다.
+      for(let ci=0;ci<candidates.length;ci++){
+        const c=candidates[ci];if(c.used)continue;
+        let nearest=Infinity;
+        for(const q of chosen)nearest=Math.min(nearest,Math.hypot(c.x-q.x,c.y-q.y));
+        const score=chosen.length?nearest:rand()*10;
+        if(score>bestScore){bestScore=score;bestIndex=ci;}
+      }
+      if(bestIndex<0)break;
+      const c=candidates[bestIndex];c.used=true;
+      if(chosen.length&&bestScore<minSpacing)break;
+      chosen.push(c);
+    }
+    // 지도에 바다가 좁은 경우를 위한 안전망: 가장 먼 유효 좌표를 추가로 찾습니다.
+    for(let i=0;chosen.length<20&&i<1000;i++){
+      const x=bounds.x+pad+rand()*Math.max(1,bounds.w-2*pad),y=bounds.y+pad+rand()*Math.max(1,bounds.h-2*pad);
+      if(!isSea(x,y))continue;
+      const nearest=chosen.reduce((d,q)=>Math.min(d,Math.hypot(x-q.x,y-q.y)),Infinity);
+      if(nearest>22)chosen.push({x,y});
+    }
+    function seaClearance(x,y){
+      let nearest=Infinity;
+      for(const k of worldKingdoms){
+        const r=k.rect,dx=Math.max(r.x-x,0,x-(r.x+r.w)),dy=Math.max(r.y-y,0,y-(r.y+r.h));
+        nearest=Math.min(nearest,Math.hypot(dx,dy));
+      }
+      return nearest;
+    }
+    chosen.slice(0,20).forEach((pos,i)=>{
+      const clearance=seaClearance(pos.x,pos.y);
+      // 궤도 반경을 주변 영토와의 거리 안으로 제한해 육지 위로 넘어가지 않게 합니다.
+      const safe=Math.max(2,clearance-5);
+      dailyEventObjects.push({id:`${key}:${i}`,x:pos.x,y:pos.y,icon:icons[Math.floor(rand()*icons.length)],phase:rand()*Math.PI*2,driftX:Math.min(22,safe*.34),driftY:Math.min(16,safe*.26),size:30+rand()*8,dir:rand()<.5?-1:1});
+    });
   }
   function drawDailyEvent(now){
     if(!dailyEventState||dailyEventState.phase!=='active')return;
@@ -758,10 +844,11 @@
       if(dailyEventState.collectedObjects&&dailyEventState.collectedObjects.includes(o.id))return;
       const p=eventObjectPosition(o,now);
       ctx.save();ctx.translate(p.x,p.y);
-      // 작은 파문과 이모지로 표현해 기존 주민처럼 바다 위를 떠다니게 합니다.
-      ctx.globalAlpha=.26;ctx.fillStyle='#d8f2e9';ctx.beginPath();ctx.ellipse(2,8,10,3.2,Math.sin(o.phase)*.12,0,Math.PI*2);ctx.fill();
+      // 더 큰 터치 타깃과 파문으로 발견하기 쉽고 떠다니는 느낌을 강화합니다.
+      ctx.globalAlpha=.32;ctx.fillStyle='#d8f2e9';ctx.beginPath();ctx.ellipse(2,10,14,4,Math.sin(o.phase)*.12,0,Math.PI*2);ctx.fill();
+      ctx.globalAlpha=.18;ctx.fillStyle='#fff4b8';ctx.beginPath();ctx.arc(0,0,18,0,Math.PI*2);ctx.fill();
       ctx.globalAlpha=1;ctx.textAlign='center';ctx.textBaseline='middle';
-      ctx.font=`${Math.round(o.size)}px "Segoe UI Emoji","Apple Color Emoji",sans-serif`;
+      ctx.font=`${Math.round(o.size/Math.max(.45,camera.zoom))}px "Segoe UI Emoji","Apple Color Emoji",sans-serif`;
       ctx.fillText(o.icon,0,0);
       ctx.restore();
     });
@@ -769,7 +856,7 @@
   function findDailyEvent(pt,touch=false){
     if(!dailyEventState||dailyEventState.phase!=='active')return null;
     ensureDailyEventObjects();
-    let best=null,bestD=Infinity;const threshold=Math.min(55,(touch?30:16)/Math.max(.35,camera.zoom));const now=performance.now();
+    let best=null,bestD=Infinity;const threshold=Math.min(80,(touch?42:28)/Math.max(.35,camera.zoom));
     for(const o of dailyEventObjects){
       if(locallyHiddenEventObjects.has(o.id))continue;
       if(dailyEventState.collectedObjects&&dailyEventState.collectedObjects.includes(o.id))continue;
@@ -807,8 +894,9 @@
 
   async function syncSharedResources(force=false){
     if(!SHARED_API_ENABLED||sharedSyncInFlight||!students||!Object.keys(students).length)return;
-    if(!force&&Date.now()-lastSharedSyncAt<15000)return;
+    if(!force&&Date.now()-lastSharedSyncAttemptAt<20000)return;
     sharedSyncInFlight=true;
+    lastSharedSyncAttemptAt=Date.now();
     try{
       const names=Object.keys(students);
       const result=await callSharedApi({action:'sync',names:JSON.stringify(names)});
@@ -1005,8 +1093,15 @@
 
   function competitivenessScore(state){
     if(!state) return 0;
-    const avg=STAT_INFO.reduce((sum,info)=>sum+(Number(state.stats[info.key])||0),0)/STAT_INFO.length;
-    return Math.round(avg*10)/10;
+    const statAvg=STAT_INFO.reduce((sum,info)=>sum+(Number(state.stats[info.key])||0),0)/STAT_INFO.length;
+    const residents=[...(state.people||[]),...(state.customResidents||[])];
+    const avgLevel=residents.length?residents.reduce((sum,p)=>sum+normalizeLevel(p.level||1),0)/residents.length:1;
+    const levelScore=clamp(((avgLevel-1)/9)*100,0,100);
+    const entry=ensureResourceEntry(state.name);
+    const eventCount=Math.max(0,Number(eventClaimCounts[state.name])||0);
+    const activityScore=clamp(((Number(entry.collected)||0)+eventCount)/30*100,0,100);
+    // 기본 국가 능력 60%, 직업인 성장 25%, 실제 자원/이벤트 참여 15%를 반영합니다.
+    return Math.round((statAvg*.60+levelScore*.25+activityScore*.15)*10)/10;
   }
 
   function competitivenessRanking(){
@@ -1711,6 +1806,7 @@
   }
 
   function rebuildWorld(){
+    staticLayerDirty=true;
     if(raf) cancelAnimationFrame(raf);
     raf=0;
     residents=[];
@@ -1885,7 +1981,7 @@
       return;
     }
     $('rankingTitle').textContent='국가 경쟁력 순위';
-    $('rankingHint').textContent='인구·행복·경제·안전·시민의식·자연·영토 7개 수치의 평균입니다.';
+    $('rankingHint').textContent='국가 자원 수치 60% · 직업인 평균 레벨 25% · 자원/이벤트 참여 15%를 반영합니다.';
 
     const medal=['🥇','🥈','🥉'];
     const podiumOrder=[1,0,2].filter(i=>ranked[i]);
@@ -2032,6 +2128,30 @@
     return ((n^(n>>16))>>>0)/4294967295;
   }
 
+  function renderStaticWorldLayer(){
+    const key=[camera.x.toFixed(2),camera.y.toFixed(2),camera.zoom.toFixed(4),activeStudent,worldKingdoms.length,worldLinks.length].join('|');
+    if(!staticLayerDirty&&key===staticLayerKey)return;
+    if(staticLayerCanvas.width!==canvas.width)staticLayerCanvas.width=canvas.width;
+    if(staticLayerCanvas.height!==canvas.height)staticLayerCanvas.height=canvas.height;
+    const mainCtx=ctx;
+    const layerCtx=staticLayerCanvas.getContext('2d',{alpha:true});
+    layerCtx.imageSmoothingEnabled=false;
+    ctx=layerCtx;
+    ctx.setTransform(RENDER_SCALE,0,0,RENDER_SCALE,0,0);
+    ctx.clearRect(0,0,WORLD_W,WORLD_H);
+    ctx.save();
+    ctx.setTransform(RENDER_SCALE*camera.zoom,0,0,RENDER_SCALE*camera.zoom,RENDER_SCALE*(WORLD_W/2-camera.x*camera.zoom),RENDER_SCALE*(WORLD_H/2-camera.y*camera.zoom));
+    drawContinentConnections();
+    worldKingdoms.forEach(drawKingdomZone);
+    drawInterKingdomDecor();
+    buildings.forEach(drawBuilding);
+    worldKingdoms.forEach(drawKingdomPopulation);
+    ctx.restore();
+    ctx=mainCtx;
+    staticLayerKey=key;
+    staticLayerDirty=false;
+  }
+
   function drawWorld(now){
     if(document.hidden){raf=0;return;}
     // requestAnimationFrame 자체는 브라우저 주기에 맞추되, 실제 전체 렌더링은 제한
@@ -2045,18 +2165,15 @@
     ctx.setTransform(RENDER_SCALE,0,0,RENDER_SCALE,0,0);
     ctx.clearRect(0,0,WORLD_W,WORLD_H);
     drawScreenWater();
+    renderStaticWorldLayer();
+    ctx.setTransform(RENDER_SCALE,0,0,RENDER_SCALE,0,0);
+    ctx.drawImage(staticLayerCanvas,0,0,WORLD_W,WORLD_H);
 
     ctx.save();
     ctx.setTransform(RENDER_SCALE*camera.zoom,0,0,RENDER_SCALE*camera.zoom,RENDER_SCALE*(WORLD_W/2-camera.x*camera.zoom),RENDER_SCALE*(WORLD_H/2-camera.y*camera.zoom));
-
-    drawContinentConnections();
-    worldKingdoms.forEach(drawKingdomZone);
-    drawInterKingdomDecor();
-    buildings.forEach(drawBuilding);
-    worldKingdoms.forEach(drawKingdomPopulation);
-    // 저사양 기기에서는 장식용 미세 애니메이션 대신 캐릭터 위치 갱신 간격을 늘립니다.
+    // 움직이는 주민과 이벤트 오브젝트만 프레임마다 다시 그립니다.
     residents.forEach(drawResident);
-    drawDailyEvent(now);
+    drawDailyEvent(eventNow());
     ctx.restore();
     drawResourceDrops(now);
 
