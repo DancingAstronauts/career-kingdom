@@ -65,7 +65,7 @@
     .brand h1{margin:0;font-size:clamp(24px,3vw,38px);line-height:1;letter-spacing:-.05em}
     .brand p{margin:7px 0 0;color:var(--ink-soft);font-size:13px;font-weight:700}
 
-    .student-tools{grid-area:tools;display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap;align-self:start;min-width:340px}
+    .student-tools{grid-area:tools;display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap;align-self:start;min-width:0}
     .student-tools label{font-size:12px;font-weight:900;color:var(--ink-soft)}
     select,.btn,.student-search{
       height:42px;
@@ -88,6 +88,17 @@
       appearance:none;
       -webkit-appearance:none;
     }
+    .kingdom-combobox{position:relative;display:flex;flex:0 1 240px;min-width:180px;max-width:min(270px,65vw)}
+    .kingdom-combobox .student-search{width:100%;max-width:none;min-width:0;flex:1;padding-right:35px}
+    .combobox-toggle{position:absolute;right:2px;top:2px;bottom:2px;width:32px;background:transparent;border:0;color:var(--ink);font-size:21px;cursor:pointer}
+    .combobox-toggle:hover{background:#ebe0bf}
+    .kingdom-suggestions{position:absolute;z-index:100;top:calc(100% + 4px);left:0;right:0;max-height:290px;overflow-y:auto;background:#fffaf0;border:2px solid var(--ink);box-shadow:4px 4px 0 rgba(0,0,0,.25);overscroll-behavior:contain}
+    .kingdom-suggestions[hidden]{display:none}
+    .kingdom-option{display:flex;align-items:center;gap:8px;width:100%;border:0;border-bottom:1px solid #dfd4b6;padding:10px 12px;text-align:left;background:transparent;color:var(--ink);font-size:13px;font-weight:800;cursor:pointer}
+    .kingdom-option:last-child{border-bottom:0}
+    .kingdom-option:hover,.kingdom-option.highlighted{background:#e4e9d4}
+    .kingdom-option.selected::after{content:'✓';margin-left:auto;color:var(--green-dark)}
+    .kingdom-no-results{padding:12px;color:var(--ink-soft);font-size:12px}
     .student-search::placeholder{color:#8b8068;font-weight:700;opacity:1}
     .student-search:focus{background:#fffdf6;border-color:var(--green-dark);box-shadow:3px 3px 0 rgba(34,37,29,.28),inset 0 0 0 1px var(--green-dark)}
     .mini-btn{width:42px;padding:0;text-align:center;font-size:18px}
@@ -137,7 +148,7 @@
     .canvas-frame{
       position:relative;
       width:100%;
-      aspect-ratio:3/2;
+       aspect-ratio:8/5;
       min-height:520px;
       border:3px solid #0f1510;
       background:#85a7a0;
@@ -288,7 +299,7 @@
       .topbar{padding:11px}
       .stats{grid-template-columns:repeat(7,82px)}
       .student-tools{justify-content:flex-start}
-      .canvas-frame{min-height:330px;aspect-ratio:1/1}
+      .canvas-frame{min-height:0;aspect-ratio:8/5}
       .side{grid-template-columns:1fr}
       .resident-list{grid-template-columns:repeat(2,minmax(0,1fr))}
       .resident-list.world-list{max-height:360px}
@@ -313,8 +324,11 @@
 
     <div class="student-tools">
       <label for="studentSearch">보기</label>
-      <input id="studentSearch" class="student-search" type="text" list="studentSearchOptions" placeholder="이름 검색…" aria-label="이름으로 왕국 검색" autocomplete="off">
-      <datalist id="studentSearchOptions"></datalist>
+      <div class="kingdom-combobox" id="kingdomCombobox">
+        <input id="studentSearch" class="student-search" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="kingdomSuggestions" placeholder="왕국 검색 또는 선택…" aria-label="왕국 검색 또는 선택" autocomplete="off">
+        <button type="button" class="combobox-toggle" id="kingdomDropdownBtn" aria-label="왕국 목록 열기" tabindex="-1">▾</button>
+        <div class="kingdom-suggestions" id="kingdomSuggestions" role="listbox" aria-label="왕국 목록" hidden></div>
+      </div>
       <select id="studentSelect" aria-label="왕국 선택" style="display:none"></select>
       <button type="button" class="btn" id="fitWorldBtn">전체 보기</button>
       <button type="button" class="btn" id="focusBtn">선택 왕국</button>
@@ -390,7 +404,7 @@
   const WORK_SHEET_NAME = '왕국 작업';
   const INTRO_SHEET_NAME = '왕국 소개';
   // 여러 방문자가 자원/레벨업/스탯을 공유하려면 Apps Script 웹 앱 URL을 여기에 입력하세요.
-  const SHARED_API_URL = 'https://script.google.com/macros/s/AKfycbyNhYDFGvkYRfrkpFbZQE4FdY1L24BFz_ke6vohMTeCz2VVEgKtyucxvN2vhJQskZ9H/exec';
+  const SHARED_API_URL = 'https://script.google.com/macros/s/AKfycbx_sGGVcPs1xbo8Q9GQBuvaLqdneo1DkkJrtyyPRqxISQ9TxHOYq4MxNAvf_UNVzzl7/exec';
   const WORLD_OPTION = '__WORLD__';
   const EVENT_DEFINITIONS = [
     {id:'pirates',title:'대해적 시대',icon:'🏴‍☠️',object:'해적선',desc:'해적선을 눌러 보물을 획득하세요.'},
@@ -502,7 +516,8 @@
   const SHARED_API_ENABLED = /^https:\/\/script\.google\.com\/macros\/s\//.test(SHARED_API_URL);
   let lastSharedSyncAt = 0;
   let lastSharedSyncAttemptAt = 0;
-  let sharedSyncInFlight = false;
+   let sharedSyncInFlight = false;
+   let resourceMutationRevision = 0;
   const JOB_RESOURCE_AFFINITY = {
     '교사':['civic','happiness'],
     '건축가':['territory','safety'],
@@ -731,9 +746,7 @@
       dailyEventState=result.event||null;
       eventClaimCounts=result.claims||{};
       eventSyncRetryDelayMs=30000;
-      if(dailyEventState){
-        try{localStorage.setItem(DAILY_EVENT_CACHE_KEY,JSON.stringify({event:dailyEventState,claims:eventClaimCounts,savedAt:Date.now()}));}catch(_){}
-      }
+       try{if(dailyEventState)localStorage.setItem(DAILY_EVENT_CACHE_KEY,JSON.stringify({event:dailyEventState,claims:eventClaimCounts,savedAt:Date.now()}));else localStorage.removeItem(DAILY_EVENT_CACHE_KEY);}catch(_){}
       updateDailyEventHud();
     }catch(err){
       eventSyncRetryDelayMs=7000;
@@ -880,21 +893,26 @@
     return best;
   }
 
+  const collectingEventObjects=new Set();
   async function collectDailyEvent(object){
-    if(!object)return;
+    if(!object||collectingEventObjects.has(object.id))return;
+    const targetStudent=activeStudent;
+    const targetEventId=dailyEventState?.id;
     if(activeStudent===WORLD_OPTION){showToast('먼저 보상을 받을 왕국을 선택해주세요.');return;}
     if(!dailyEventState||dailyEventState.phase!=='active'){showToast('지금은 랜덤 이벤트가 진행 중이 아닙니다.');return;}
+    collectingEventObjects.add(object.id);
     locallyHiddenEventObjects.add(object.id);
     try{
-      const result=await callSharedApi({action:'eventCollect',name:activeStudent,eventId:dailyEventState.id,objectId:object.id});
-      if(result.entry){resourceProgress[activeStudent]=result.entry;saveResourceProgress();}
+      const result=await callSharedApi({action:'eventCollect',name:targetStudent,eventId:targetEventId,objectId:object.id});
+       if(result.entry){resourceMutationRevision++;resourceProgress[targetStudent]=result.entry;saveResourceProgress();}
       if(result.claims)eventClaimCounts=result.claims;
       if(result.collectedObjects)dailyEventState.collectedObjects=result.collectedObjects;
       if(!result.collected){showToast(result.message||'이 왕국은 이벤트 보상을 3회 획득했습니다.');await syncDailyEvent(true);return;}
       const info=resourceStatInfo(result.statKey);
-      showToast(`${kingdomDisplayName(activeStudent)} 이벤트 보상! ${info.icon} ${info.label} +1`);
+      showToast(`${kingdomDisplayName(targetStudent)} 이벤트 보상! ${info.icon} ${info.label} +1`);
       await syncSharedResources(true);await syncDailyEvent(true);rebuildWorld();renderSelection();updateResourceHud();
     }catch(err){locallyHiddenEventObjects.delete(object.id);console.error('이벤트 보상 획득 실패:',err);showToast('이벤트 보상을 받지 못했습니다. 공용 저장소 연결을 확인해주세요.');}
+    finally{collectingEventObjects.delete(object.id);}
   }
 
   function sharedResidentPayload(name){
@@ -909,14 +927,22 @@
   async function syncSharedResources(force=false){
     if(!SHARED_API_ENABLED||sharedSyncInFlight||!students||!Object.keys(students).length)return;
     if(!force&&Date.now()-lastSharedSyncAttemptAt<20000)return;
-    sharedSyncInFlight=true;
-    lastSharedSyncAttemptAt=Date.now();
+     sharedSyncInFlight=true;
+     const revisionAtStart=resourceMutationRevision;
+     lastSharedSyncAttemptAt=Date.now();
     try{
       const names=Object.keys(students);
       const result=await callSharedApi({action:'sync',names:JSON.stringify(names)});
-      const next=result.data&&typeof result.data==='object'?result.data:{};
-      const before=JSON.stringify(resourceProgress);
-      resourceProgress=next;
+       const next=result.data&&typeof result.data==='object'?result.data:{};
+       // 서버 응답 대기 중 수령이 성공했다면 옛 sync 응답을 적용하지 않는다.
+       if(revisionAtStart!==resourceMutationRevision)return;
+       const before=JSON.stringify(resourceProgress);
+       const merged={...next};
+       names.forEach(name=>{
+         const current=resourceProgress[name],incoming=merged[name];
+         if(current && incoming && Number(current.version||0)>Number(incoming.version||0)) merged[name]=current;
+       });
+       resourceProgress=merged;
       names.forEach(name=>ensureResourceEntry(name));
       saveResourceProgress();
       lastSharedSyncAt=Date.now();
@@ -1054,11 +1080,17 @@
     return STAT_INFO.find(info=>info.key===key) || STAT_INFO[0];
   }
 
-  async function collectResourceFor(name){
-    if(SHARED_API_ENABLED){
+   const collectingResources=new Set();
+   async function collectResourceFor(name){
+     if(collectingResources.has(name))return false;
+     collectingResources.add(name);
+     try{return await collectResourceForInternal(name);}finally{collectingResources.delete(name);}
+   }
+   async function collectResourceForInternal(name){
+     if(SHARED_API_ENABLED){
       try{
         const result=await callSharedApi({action:'collect',name, residents:JSON.stringify(sharedResidentPayload(name))});
-        if(result.entry){resourceProgress[name]=result.entry;saveResourceProgress();}
+         if(result.entry){resourceMutationRevision++;resourceProgress[name]=result.entry;saveResourceProgress();}
         lastSharedSyncAt=0;
         if(!result.collected){
           await syncSharedResources(true);
@@ -1112,7 +1144,7 @@
     const avgLevel=residents.length?residents.reduce((sum,p)=>sum+normalizeLevel(p.level||1),0)/residents.length:1;
     const levelScore=clamp(((avgLevel-1)/9)*100,0,100);
     const entry=ensureResourceEntry(state.name);
-    const eventCount=Math.max(0,Number(eventClaimCounts[state.name])||0);
+    const eventCount=Math.max(0,Number(entry.eventCollectedTotal)||0);
     const activityScore=clamp(((Number(entry.collected)||0)+eventCount)/30*100,0,100);
     // 기본 국가 능력 60%, 직업인 성장 25%, 실제 자원/이벤트 참여 15%를 반영합니다.
     return Math.round((statAvg*.60+levelScore*.25+activityScore*.15)*10)/10;
@@ -1222,17 +1254,22 @@
     })).filter(r=>r.학생 && r.직업);
   }
 
-  function groupStudents(rows){
-    const out={};
+   function groupStudents(rows){
+     const out={};
+     const duplicates=[];
     rows.forEach(r=>{
       if(!out[r.학생]) out[r.학생]={name:r.학생,jobs:{},customResidents:[]};
-      if(JOBS.includes(r.직업)) out[r.학생].jobs[r.직업]=r;
+       if(JOBS.includes(r.직업)){
+         if(out[r.학생].jobs[r.직업])duplicates.push(`${r.학생}/${r.직업}`);
+         out[r.학생].jobs[r.직업]=r;
+       }
       else out[r.학생].customResidents.push(r);
     });
-    return out;
-  }
+     if(duplicates.length)console.warn('중복된 직업 활동 기록(마지막 행 사용):',duplicates);
+     return out;
+   }
 
-  function resolveTrait(row){
+   function resolveTrait(row){
     const job=row.직업;
     return getTypeByName(job,row.판단) || getTypeByName(job,row.추천) || recommendTrait(job,row.q1,row.q2,row.q3) || TRAITS[job][0];
   }
@@ -1514,13 +1551,7 @@
     if(kingdomIntros[`__key__${key}`]) return kingdomIntros[`__key__${key}`];
     if(kingdomIntros[`__raw__${norm(raw)}`]) return kingdomIntros[`__raw__${norm(raw)}`];
 
-    // 마지막 안전망: '필근'과 '필근왕국'처럼 한쪽에 왕국이 붙은 경우도 매칭.
-    const aliasKeys=Object.keys(kingdomIntros).filter(k=>k.startsWith('__key__'));
-    const fuzzy=aliasKeys.find(k=>{
-      const candidate=k.slice('__key__'.length);
-      return candidate && key && (candidate===key || candidate.startsWith(key) || key.startsWith(candidate));
-    });
-    return fuzzy ? kingdomIntros[fuzzy] : '';
+         return '';
   }
 
   async function loadGoogleSheet(){
@@ -1542,7 +1573,8 @@
     }catch(err){
       if(myLoad!==sheetLoadSeq) return;
       console.error('왕국 작업 시트 로드 실패:',err);
-      fallbackDemo('왕국 작업 시트를 읽지 못해 데모 세계를 표시합니다.');
+       setStatus('error','왕국 작업 시트 연결 실패 · 시트 권한이나 네트워크를 확인한 후 새로고침하세요.');
+       showToast('실제 데이터를 불러오지 못했습니다. 시트 새로고침을 눌러 다시 시도하세요.');
       return;
     }
 
@@ -1603,37 +1635,103 @@
     }
   }
 
-  function populateStudentSelect(isDemo){
-    const select=$('studentSelect');
-    const names=Object.keys(students).sort((a,b)=>a.localeCompare(b,'ko'));
-    const prev=activeStudent;
-    select.innerHTML='';
-    const searchOptions=$('studentSearchOptions');
-    searchOptions.innerHTML='';
-    const all=document.createElement('option');
-    all.value=WORLD_OPTION;
-    all.textContent=`🌍 전체 세계 (${names.length}개 왕국)`;
-    select.appendChild(all);
-    const allSearch=document.createElement('option');
-    allSearch.value=`🌍 전체 세계 (${names.length}개 왕국)`;
-    searchOptions.appendChild(allSearch);
-    names.forEach(name=>{
-      const op=document.createElement('option');
-      op.value=name;
-      op.textContent=name+(isDemo?' (데모)':'');
-      select.appendChild(op);
-      const searchOp=document.createElement('option');
-      searchOp.value=name;
-      searchOptions.appendChild(searchOp);
-    });
-    const queryName=new URLSearchParams(location.search).get('student');
-    if(prev!==WORLD_OPTION && names.includes(prev)) activeStudent=prev;
-    else if(queryName && names.includes(queryName)) activeStudent=queryName;
-    else activeStudent=WORLD_OPTION;
-    select.value=activeStudent;
-    $('studentSearch').value=activeStudent===WORLD_OPTION ? `🌍 전체 세계 (${names.length}개 왕국)` : activeStudent;
-    renderSelection();
-  }
+     let comboOpen=false;
+   let comboHighlighted=0;
+   let comboOptions=[];
+   const comboRoot=$('kingdomCombobox');
+   const comboInput=$('studentSearch');
+   const comboList=$('kingdomSuggestions');
+   const comboButton=$('kingdomDropdownBtn');
+   function kingdomOptions(){
+     const names=Object.keys(students).sort((a,b)=>a.localeCompare(b,'ko'));
+     return [{value:WORLD_OPTION,label:`🌍 전체 세계 (${names.length}개 왕국)`},...names.map(name=>({value:name,label:name}))];
+   }
+   function updateComboText(){
+     comboInput.value=kingdomOptions().find(o=>o.value===activeStudent)?.label||'';
+   }
+   function hideCombo(){
+     comboOpen=false;comboList.hidden=true;comboInput.setAttribute('aria-expanded','false');
+     comboInput.removeAttribute('aria-activedescendant');
+   }
+   function showCombo(filter=''){
+     const all=kingdomOptions();
+     const query=norm(filter);
+     comboOptions=query?all.filter(o=>norm(o.label).includes(query)||norm(o.value).includes(query)):all;
+     comboHighlighted=Math.max(0,comboOptions.findIndex(o=>o.value===activeStudent));
+     comboList.replaceChildren();
+     if(!comboOptions.length){
+       const empty=document.createElement('div');empty.className='kingdom-no-results';
+       empty.textContent='검색 결과가 없습니다.';comboList.appendChild(empty);
+     }
+     comboOptions.forEach((option,i)=>{
+       const button=document.createElement('button');button.type='button';
+       button.id='kingdom-option-'+i;button.setAttribute('role','option');
+       button.className='kingdom-option'+(option.value===activeStudent?' selected':'')+(i===comboHighlighted?' highlighted':'');
+       button.setAttribute('aria-selected',String(option.value===activeStudent));
+       button.textContent=option.label;
+       // 포커스가 입력창에서 이탈하기 전에 클릭을 확정한다.
+       button.addEventListener('pointerdown',ev=>ev.preventDefault());
+       button.addEventListener('click',()=>commitCombo(option.value));
+       comboList.appendChild(button);
+     });
+     comboOpen=true;comboList.hidden=false;comboInput.setAttribute('aria-expanded','true');
+     highlightCombo(comboHighlighted);
+   }
+   function highlightCombo(index){
+     if(!comboOptions.length)return;
+     comboHighlighted=(index+comboOptions.length)%comboOptions.length;
+     comboList.querySelectorAll('[role="option"]').forEach((el,i)=>el.classList.toggle('highlighted',i===comboHighlighted));
+     const el=comboList.querySelector('#kingdom-option-'+comboHighlighted);
+     if(el){comboInput.setAttribute('aria-activedescendant',el.id);el.scrollIntoView({block:'nearest'});}
+   }
+   function commitCombo(value){
+     if(value!==WORLD_OPTION&&!students[value])return;
+     activeStudent=value;
+     $('studentSelect').value=value;
+     updateComboText();hideCombo();renderSelection();
+     if(value===WORLD_OPTION)fitWorld();else focusSelectedKingdom();
+   }
+   function populateStudentSelect(isDemo){
+     const select=$('studentSelect');
+     const names=Object.keys(students).sort((a,b)=>a.localeCompare(b,'ko'));
+     const prev=activeStudent;
+     select.replaceChildren();
+     kingdomOptions().forEach(o=>{
+       const option=document.createElement('option');option.value=o.value;
+       option.textContent=o.label+(isDemo&&o.value!==WORLD_OPTION?' (데모)':'');
+       select.appendChild(option);
+     });
+     const queryName=new URLSearchParams(location.search).get('student');
+     if(prev!==WORLD_OPTION&&names.includes(prev))activeStudent=prev;
+     else if(queryName&&names.includes(queryName))activeStudent=queryName;
+     else activeStudent=WORLD_OPTION;
+     select.value=activeStudent;
+     updateComboText();hideCombo();renderSelection();
+   }
+   comboInput.addEventListener('focus',()=>{comboInput.select();showCombo('');});
+   comboInput.addEventListener('click',()=>{if(!comboOpen)showCombo('');});
+   comboInput.addEventListener('input',()=>showCombo(comboInput.value));
+   comboInput.addEventListener('keydown',ev=>{
+     if(ev.key==='ArrowDown'||ev.key==='ArrowUp'){
+       ev.preventDefault();
+       if(!comboOpen)showCombo('');
+       else highlightCombo(comboHighlighted+(ev.key==='ArrowDown'?1:-1));
+     }else if(ev.key==='Enter'){
+       ev.preventDefault();
+       if(!comboOpen)showCombo(comboInput.value);
+       if(comboOptions[comboHighlighted])commitCombo(comboOptions[comboHighlighted].value);
+     }else if(ev.key==='Escape'){
+       ev.preventDefault();hideCombo();updateComboText();comboInput.blur();
+     }else if(ev.key==='Tab'){
+       hideCombo();updateComboText();
+     }
+   });
+   comboButton.addEventListener('click',()=>{
+     if(comboOpen){hideCombo();updateComboText();}else{comboInput.focus();showCombo('');}
+   });
+   document.addEventListener('pointerdown',ev=>{
+     if(!comboRoot.contains(ev.target)){hideCombo();updateComboText();}
+   });
 
   // ─────────────────────────────────────────────
   // World layout
@@ -1850,6 +1948,9 @@
     });
     resolveKingdomOverlaps(worldKingdoms);
     worldLinks=computeWorldLinks(worldKingdoms);
+    // 왕국 크기나 위치가 달라지면 바다 아이콘의 안전한 배치도 갱신한다.
+    dailyEventObjectKey='';
+    dailyEventObjects=[];
 
     if(worldKingdoms.length){
       const minX=Math.min(...worldKingdoms.map(k=>k.rect.x-60));
@@ -2103,8 +2204,8 @@
     if(!students[name]) return;
     activeStudent=name;
     $('studentSelect').value=name;
-    $('studentSearch').value=name;
-    renderSelection();
+     updateComboText();hideCombo();
+     renderSelection();
     if(focus) focusSelectedKingdom();
   }
 
@@ -3357,40 +3458,11 @@
     setCanvasCursor();
   });
 
-  function applyStudentSearch(){
-    const typed=$('studentSearch').value.trim();
-    const select=$('studentSelect');
-    const exact=[...select.options].find(op=>op.value===typed || op.textContent===typed);
-    if(!exact){
-      const matched=Object.keys(students).find(name=>name.toLocaleLowerCase('ko').includes(typed.toLocaleLowerCase('ko')));
-      if(typed && matched){
-        $('studentSearch').value=matched;
-        select.value=matched;
-        activeStudent=matched;
-      }else return;
-    }else{
-      activeStudent=exact.value;
-      select.value=exact.value;
-      $('studentSearch').value=exact.value===WORLD_OPTION ? exact.textContent : exact.value;
-    }
-    renderSelection();
-    if(activeStudent===WORLD_OPTION) fitWorld(); else focusSelectedKingdom();
-  }
-  $('studentSearch').addEventListener('change',applyStudentSearch);
-  $('studentSearch').addEventListener('keydown',e=>{
-    if(e.key==='Enter'){e.preventDefault();applyStudentSearch();}
-    if(e.key==='Escape'){$('studentSearch').value=activeStudent===WORLD_OPTION ? $('studentSelect').options[0]?.textContent || '' : activeStudent;}
-  });
-  $('studentSelect').addEventListener('change',e=>{
-    activeStudent=e.target.value;
-    $('studentSearch').value=activeStudent===WORLD_OPTION ? e.target.options[0]?.textContent || '' : activeStudent;
-    renderSelection();
-    if(activeStudent===WORLD_OPTION) fitWorld(); else focusSelectedKingdom();
-  });
-  $('reloadBtn').addEventListener('click',()=>{showToast('시트를 다시 불러옵니다.');loadGoogleSheet();});
+     $('studentSelect').addEventListener('change',e=>commitCombo(e.target.value));
+$('reloadBtn').addEventListener('click',()=>{showToast('시트를 다시 불러옵니다.');loadGoogleSheet();});
   setInterval(()=>{syncDailyEvent(false);updateDailyEventHud();},1000);
   syncDailyEvent(true);
-  $('fitWorldBtn').addEventListener('click',()=>{activeStudent=WORLD_OPTION;$('studentSelect').value=WORLD_OPTION;$('studentSearch').value=$('studentSelect').options[0]?.textContent || '';renderSelection();fitWorld();});
+  $('fitWorldBtn').addEventListener('click',()=>{activeStudent=WORLD_OPTION;$('studentSelect').value=WORLD_OPTION;updateComboText();hideCombo();renderSelection();fitWorld();});
   $('focusBtn').addEventListener('click',()=>{if(activeStudent===WORLD_OPTION) showToast('먼저 학생 왕국을 선택해주세요.'); else focusSelectedKingdom();});
   $('zoomOutBtn').addEventListener('click',()=>changeZoom(.82));
   $('zoomInBtn').addEventListener('click',()=>changeZoom(1.22));
