@@ -207,6 +207,8 @@
     .resident-card.locked{background:#d6ccb0;color:#827967;filter:saturate(.55);cursor:default}
     .resident-card.active{outline:3px solid var(--gold);outline-offset:-3px}
     .kingdom-meta{font-size:10px;line-height:1.35;margin-top:5px;color:#665e50;font-weight:800}
+    .kingdom-resource{margin-top:6px;padding-top:5px;border-top:1px dashed #b5a783;font-size:10px;font-weight:900;color:#50683e;font-variant-numeric:tabular-nums}
+    .kingdom-resource.is-error{color:var(--red)}
     .resident-card .job{font-size:11px;font-weight:900;color:var(--ink-soft)}
     .resident-card .trait{font-size:12px;font-weight:1000;line-height:1.25;margin-top:4px}
     .resident-card .quote{font-size:10px;line-height:1.3;margin-top:5px;color:#665e50;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
@@ -404,7 +406,7 @@
   const WORK_SHEET_NAME = '왕국 작업';
   const INTRO_SHEET_NAME = '왕국 소개';
   // 여러 방문자가 자원/레벨업/스탯을 공유하려면 Apps Script 웹 앱 URL을 여기에 입력하세요.
-  const SHARED_API_URL = 'https://script.google.com/macros/s/AKfycbx_sGGVcPs1xbo8Q9GQBuvaLqdneo1DkkJrtyyPRqxISQ9TxHOYq4MxNAvf_UNVzzl7/exec';
+  const SHARED_API_URL = 'https://script.google.com/macros/s/AKfycbzTusDuEZ7jHeR6-5JMrpGY9P76Qi_yW-Bfbl_fD0lblKzqE8Ekga95nUFhpf4BWVcf/exec';
   const WORLD_OPTION = '__WORLD__';
   const EVENT_DEFINITIONS = [
     {id:'pirates',title:'대해적 시대',icon:'🏴‍☠️',object:'해적선',desc:'해적선을 눌러 보물을 획득하세요.'},
@@ -516,6 +518,8 @@
   const SHARED_API_ENABLED = /^https:\/\/script\.google\.com\/macros\/s\//.test(SHARED_API_URL);
   let lastSharedSyncAt = 0;
   let lastSharedSyncAttemptAt = 0;
+  let sharedResourcesLoaded = false;
+  let sharedResourceError = '';
    let sharedSyncInFlight = false;
    let resourceMutationRevision = 0;
   const JOB_RESOURCE_AFFINITY = {
@@ -640,6 +644,13 @@
   // 이벤트 시간은 Apps Script 서버 시각에 맞춰 기기 시계 오차를 보정합니다.
   let serverTimeOffsetMs = 0;
   function eventNow(){ return Date.now() + serverTimeOffsetMs; }
+  // 자원 시간도 Apps Script의 시각을 사용합니다. 3시간 계산의 기준은 서버입니다.
+  function resourceNow(){ return SHARED_API_ENABLED ? eventNow() : Date.now(); }
+  function adjustServerClock(serverNow, requestStartedAt, receivedAt){
+    if(Number.isFinite(Number(serverNow)) && Number(serverNow)>0){
+      serverTimeOffsetMs=Number(serverNow)-Math.round((requestStartedAt+receivedAt)/2);
+    }
+  }
   let dailyEventObjects = [];
   let dailyEventObjectKey = '';
   let locallyHiddenEventObjects = new Set();
@@ -739,10 +750,8 @@
     try{
       const result=await callSharedApi({action:'eventStatus',name:activeStudent===WORLD_OPTION?'':activeStudent});
       const receivedAt=Date.now();
-      if(Number.isFinite(Number(result.serverNow))){
-        // 요청 왕복 시간의 중간값을 사용해 기기 시계 오차와 네트워크 지연을 함께 완화합니다.
-        serverTimeOffsetMs=Number(result.serverNow)-Math.round((requestStartedAt+receivedAt)/2);
-      }
+      // 요청 왕복 시간의 중간값으로 서버 시각을 추정합니다.
+      adjustServerClock(result.serverNow,requestStartedAt,receivedAt);
       dailyEventState=result.event||null;
       eventClaimCounts=result.claims||{};
       eventSyncRetryDelayMs=30000;
@@ -926,16 +935,23 @@
 
   async function syncSharedResources(force=false){
     if(!SHARED_API_ENABLED||sharedSyncInFlight||!students||!Object.keys(students).length)return;
-    if(!force&&Date.now()-lastSharedSyncAttemptAt<20000)return;
+    if(!force&&Date.now()-lastSharedSyncAttemptAt<15000)return;
      sharedSyncInFlight=true;
      const revisionAtStart=resourceMutationRevision;
-     lastSharedSyncAttemptAt=Date.now();
+     const requestStartedAt=Date.now();
+     lastSharedSyncAttemptAt=requestStartedAt;
     try{
       const names=Object.keys(students);
       const result=await callSharedApi({action:'sync',names:JSON.stringify(names)});
+      adjustServerClock(result.serverNow,requestStartedAt,Date.now());
        const next=result.data&&typeof result.data==='object'?result.data:{};
+       if(!names.every(name=>next[name] && typeof next[name]==='object')){
+         throw new Error('서버가 일부 왕국의 자원 데이터를 반환하지 않았습니다. 배포 버전과 왕국 작업 시트의 학생 이름을 확인하세요.');
+       }
        // 서버 응답 대기 중 수령이 성공했다면 옛 sync 응답을 적용하지 않는다.
        if(revisionAtStart!==resourceMutationRevision)return;
+       sharedResourcesLoaded=true;
+       sharedResourceError='';
        const before=JSON.stringify(resourceProgress);
        const merged={...next};
        names.forEach(name=>{
@@ -948,10 +964,13 @@
       lastSharedSyncAt=Date.now();
       if(before!==JSON.stringify(resourceProgress)){rebuildWorld();renderSelection();}
       updateResourceHud();
-    }catch(err){
-      console.error('공용 왕국 데이터 동기화 실패:',err);
-      if(!window.__sharedApiWarned){showToast('공용 저장소 연결에 실패했습니다. 관리자에게 확인을 요청해주세요.');window.__sharedApiWarned=true;}
-    }finally{sharedSyncInFlight=false;}
+     }catch(err){
+       sharedResourcesLoaded=false;
+       sharedResourceError=String(err && err.message ? err.message : err);
+       console.error('공용 왕국 데이터 동기화 실패:',err);
+       if(!window.__sharedApiWarned){showToast('공용 저장소 연결 오류! 자원 타이머를 불러오지 못했습니다.');window.__sharedApiWarned=true;}
+       updateResourceHud();
+     }finally{sharedSyncInFlight=false;}
   }
 
   function loadResourceProgress(){
@@ -1089,13 +1108,15 @@
    async function collectResourceForInternal(name){
      if(SHARED_API_ENABLED){
       try{
-        const result=await callSharedApi({action:'collect',name, residents:JSON.stringify(sharedResidentPayload(name))});
+         const startedAt=Date.now();
+         const result=await callSharedApi({action:'collect',name, residents:JSON.stringify(sharedResidentPayload(name))});
+         adjustServerClock(result.serverNow,startedAt,Date.now());
          if(result.entry){resourceMutationRevision++;resourceProgress[name]=result.entry;saveResourceProgress();}
         lastSharedSyncAt=0;
         if(!result.collected){
           await syncSharedResources(true);
           const entry=ensureResourceEntry(name);
-          const remain=Math.max(0,Number(entry.nextAt||0)-Date.now());
+          const remain=Math.max(0,Number(entry.nextAt||0)-resourceNow());
           showToast(result.message||`${name}의 다음 자원까지 ${formatRemaining(remain)}`);
           return false;
         }
@@ -1117,7 +1138,7 @@
     }
     const entry=ensureResourceEntry(name);
     if(!entry.pending){
-      const remain=Math.max(0,Number(entry.nextAt||0)-Date.now());
+      const remain=Math.max(0,Number(entry.nextAt||0)-resourceNow());
       showToast(`${name}의 다음 자원까지 ${formatRemaining(remain)}`);
       return false;
     }
@@ -2078,7 +2099,7 @@
     list.innerHTML=worldKingdoms.map(k=>{
       const s=k.state.stats;
       const crown=crownSeals(s).length;
-      return `<div class="resident-card kingdom-card" data-student="${escapeHtml(k.name)}"><div class="mini">🏰</div><div class="job">${escapeHtml(kingdomDisplayName(k.name))}</div><div class="trait">${kingdomRank(s).name}</div>${goalStarsHtml(crown)}<div class="kingdom-meta">👥 ${s.population} · 😊 ${s.happiness} · 💰 ${s.economy} · 🌳 ${s.nature}</div></div>`;
+      return `<div class="resident-card kingdom-card" data-student="${escapeHtml(k.name)}"><div class="mini">🏰</div><div class="job">${escapeHtml(kingdomDisplayName(k.name))}</div><div class="trait">${kingdomRank(s).name}</div>${goalStarsHtml(crown)}<div class="kingdom-meta">👥 ${s.population} · 😊 ${s.happiness} · 💰 ${s.economy} · 🌳 ${s.nature}</div><div class="kingdom-resource" data-resource-student="${escapeHtml(k.name)}">⌛ 동기화 중</div></div>`;
     }).join('');
     list.querySelectorAll('[data-student]').forEach(card=>{
       card.addEventListener('click',()=>selectKingdom(card.dataset.student,true));
@@ -2137,6 +2158,32 @@
     });
   }
 
+  function resourceDisplayFor(name,now){
+    if(SHARED_API_ENABLED && !sharedResourcesLoaded){
+      return {text:sharedResourceError?'⚠ 자원 서버 연결 오류':'⌛ 자원 데이터 확인 중',error:!!sharedResourceError,ready:false};
+    }
+    const entry=ensureResourceEntry(name);
+    if(entry.pending){
+      const info=resourceStatInfo(entry.pending.statKey);
+      return {text:`🎁 ${info.icon} ${info.label} +${entry.pending.amount} 수령 가능`,ready:true,error:false};
+    }
+    const nextAt=Number(entry.nextAt||0);
+    if(!Number.isFinite(nextAt) || nextAt<=0){
+      return {text:'⌛ 서버에서 자원 생성 상태 확인 중',ready:false,error:false};
+    }
+    if(nextAt<=now) return {text:'⌛ 생성 시간 도달 · 동기화 중',ready:false,error:false};
+    return {text:`⏳ ${formatRemaining(nextAt-now)} 후 생성`,ready:false,error:false};
+  }
+
+  // 전체 세계의 각 왕국 카드에도 3시간 남은 시간을 따로 표시합니다.
+  function updateKingdomResourceTimers(now){
+    document.querySelectorAll('[data-resource-student]').forEach(el=>{
+      const state=resourceDisplayFor(el.dataset.resourceStudent,now);
+      if(el.textContent!==state.text) el.textContent=state.text;
+      el.classList.toggle('is-error',state.error);
+    });
+  }
+
   function updateResourceHud(){
     const hud=$('resourceHud');
     if(!hud) return;
@@ -2145,12 +2192,23 @@
       hud.innerHTML='<div class="resource-big">🎁 왕국 자원</div><div class="resource-small">시트 연결 후 자원이 생성됩니다.</div>';
       return;
     }
-    const now=Date.now();
+    const now=resourceNow();
+    updateKingdomResourceTimers(now);
+    if(SHARED_API_ENABLED && !sharedResourcesLoaded){
+      hud.classList.remove('ready');
+      hud.innerHTML=sharedResourceError
+        ? '<div class="resource-big">⚠ 자원 서버 연결 오류</div><div class="resource-small">3시간 타이머 데이터를 가져오지 못했습니다. Apps Script 웹 앱 배포와 실행 권한을 확인하세요.</div>'
+        : '<div class="resource-big">⌛ 자원 데이터 동기화 중</div><div class="resource-small">Apps Script에서 각 왕국의 생성 시각을 읽고 있습니다.</div>';
+      return;
+    }
     if(activeStudent===WORLD_OPTION){
       const names=Object.keys(students);
       const ready=names.filter(name=>!!ensureResourceEntry(name).pending).length;
+      const future=names.map(name=>ensureResourceEntry(name)).filter(e=>!e.pending && Number(e.nextAt)>now)
+        .map(e=>Number(e.nextAt)-now);
+      const nearest=future.length ? `다음 생성까지 ${formatRemaining(Math.min(...future))} · ` : '';
       hud.classList.toggle('ready',ready>0);
-      hud.innerHTML=`<div class="resource-big">🎁 수확 가능 ${ready} / ${names.length}</div><div class="resource-small">자원 3회 획득마다 주민 1명 무작위 레벨업 · 미수령 자원은 쌓이지 않습니다</div>`;
+      hud.innerHTML=`<div class="resource-big">🎁 수확 가능 ${ready} / ${names.length}</div><div class="resource-small">${nearest}왕국별 남은 시간은 오른쪽 왕국 카드에서 확인 · 미수령 자원은 쌓이지 않습니다.</div>`;
       return;
     }
     const entry=ensureResourceEntry(activeStudent);
@@ -2159,9 +2217,10 @@
       hud.classList.add('ready');
       hud.innerHTML=`<div class="resource-big">${info.icon} ${info.label} +${entry.pending.amount} 도착!</div><div class="resource-small">왕국 위의 아이콘을 눌러 획득하세요.${entry.pending.boostedBy?` · ${escapeHtml(entry.pending.boostedBy)} 시너지`:''}</div>`;
     }else{
-      const remain=Math.max(0,Number(entry.nextAt||0)-now);
+      const nextAt=Number(entry.nextAt||0);
       hud.classList.remove('ready');
-      hud.innerHTML=`<div class="resource-big">🎁 다음 자원 ${formatRemaining(remain)}</div><div class="resource-small">수령할 때마다 3시간 카운트가 다시 시작됩니다.</div>`;
+      const text=nextAt>0 && nextAt<=now ? '⌛ 생성 시간 도달 · 서버 동기화 중' : nextAt>0 ? `🎁 다음 자원 ${formatRemaining(nextAt-now)}` : '⌛ 자원 생성 상태 확인 중';
+      hud.innerHTML=`<div class="resource-big">${text}</div><div class="resource-small">수령할 때마다 3시간 카운트가 다시 시작됩니다.</div>`;
     }
   }
 
@@ -3480,6 +3539,8 @@ $('reloadBtn').addEventListener('click',()=>{showToast('시트를 다시 불러�
   });
   setCanvasCursor();
   resourceTimer=window.setInterval(()=>refreshResourceAvailability(),5000);
+   // 표시만 매초 업데이트하며 네트워크 요청은 기존처럼 별도 주기로 제한합니다.
+   window.setInterval(()=>updateResourceHud(),1000);
   window.addEventListener('storage',ev=>{
     if(ev.key!==RESOURCE_STORAGE_KEY || SHARED_API_ENABLED) return;
     resourceProgress=loadResourceProgress();
